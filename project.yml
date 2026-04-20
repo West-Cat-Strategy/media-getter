@@ -1,0 +1,170 @@
+name: MediaGetter
+options:
+  minimumXcodeGenVersion: 2.45.4
+  createIntermediateGroups: true
+settings:
+  base:
+    PRODUCT_BUNDLE_IDENTIFIER: com.bryan.mediagetter
+    MACOSX_DEPLOYMENT_TARGET: 14.0
+    SWIFT_VERSION: 6.0
+    ARCHS: arm64
+    CURRENT_PROJECT_VERSION: 1
+    MARKETING_VERSION: 0.1.0
+    GENERATE_INFOPLIST_FILE: true
+    INFOPLIST_KEY_CFBundleDisplayName: MediaGetter
+    INFOPLIST_KEY_LSApplicationCategoryType: public.app-category.video
+    INFOPLIST_KEY_NSHumanReadableCopyright: Copyright 2026 Bryan
+    CODE_SIGN_STYLE: Automatic
+targets:
+  MediaGetter:
+    type: application
+    platform: macOS
+    deploymentTarget: "14.0"
+    sources:
+      - path: Sources/MediaGetter
+    resources:
+      - path: Resources
+        excludes:
+          - Tools
+    settings:
+      base:
+        PRODUCT_NAME: MediaGetter
+        PRODUCT_BUNDLE_IDENTIFIER: com.bryan.mediagetter
+        SWIFT_EMIT_LOC_STRINGS: NO
+        ENABLE_HARDENED_RUNTIME: YES
+    preBuildScripts:
+      - name: Bundle CLI Tools
+        outputFiles:
+          - $(TARGET_BUILD_DIR)/$(UNLOCALIZED_RESOURCES_FOLDER_PATH)/Tools/yt-dlp
+          - $(TARGET_BUILD_DIR)/$(UNLOCALIZED_RESOURCES_FOLDER_PATH)/Tools/ffmpeg
+          - $(TARGET_BUILD_DIR)/$(UNLOCALIZED_RESOURCES_FOLDER_PATH)/Tools/ffprobe
+          - $(TARGET_BUILD_DIR)/$(UNLOCALIZED_RESOURCES_FOLDER_PATH)/Tools/deno
+          - $(TARGET_BUILD_DIR)/$(UNLOCALIZED_RESOURCES_FOLDER_PATH)/Tools/whisper-cli
+          - $(TARGET_BUILD_DIR)/$(UNLOCALIZED_RESOURCES_FOLDER_PATH)/Models/ggml-base.en.bin
+          - $(TARGET_BUILD_DIR)/$(UNLOCALIZED_RESOURCES_FOLDER_PATH)/Models/ggml-base.en-encoder.mlmodelc
+        script: |
+          set -euo pipefail
+
+          TOOLS_DIR="${TARGET_BUILD_DIR}/${UNLOCALIZED_RESOURCES_FOLDER_PATH}/Tools"
+          MODELS_DIR="${TARGET_BUILD_DIR}/${UNLOCALIZED_RESOURCES_FOLDER_PATH}/Models"
+          mkdir -p "$TOOLS_DIR"
+          mkdir -p "$MODELS_DIR"
+
+          resolve_vendored_tool() {
+            local tool="$1"
+            local source_path="${SRCROOT}/Vendor/Tools/${tool}"
+
+            if [[ -x "$source_path" ]]; then
+              printf '%s\n' "$source_path"
+              return 0
+            fi
+
+            echo "error: missing vendored tool '$tool'. Run script/vendor_media_tools.sh to populate Vendor/Tools/${tool}" >&2
+            exit 1
+          }
+
+          copy_required_model() {
+            local asset="$1"
+            local source_path="${SRCROOT}/Vendor/Models/${asset}"
+            local destination_path="${MODELS_DIR}/${asset}"
+
+            rm -rf "$destination_path"
+
+            if [[ ! -e "$source_path" ]]; then
+              echo "error: missing vendored model asset '$asset'. Run script/vendor_media_tools.sh to populate Vendor/Models/${asset}" >&2
+              exit 1
+            fi
+
+            cp -R "$source_path" "$destination_path"
+          }
+
+          validate_arm64_tool() {
+            local tool_path="$1"
+            local tool_name="$2"
+            local description
+
+            description="$(/usr/bin/file -b "$tool_path")"
+            if [[ "$description" == *"universal binary"* ]] || [[ "$description" != *"arm64"* ]]; then
+              echo "error: vendored tool '$tool_name' must be arm64-only. Found: $description" >&2
+              exit 1
+            fi
+          }
+
+          validate_self_contained_tool() {
+            local tool_path="$1"
+            local tool_name="$2"
+            local dependency
+
+            for dependency in $(/usr/bin/otool -L "$tool_path" | tail -n +2 | sed 's/^[[:space:]]*//' | awk '{print $1}'); do
+              case "$dependency" in
+                /System/*|/usr/lib/*|@executable_path/*|@loader_path/*|@rpath/*)
+                  ;;
+                *)
+                  echo "error: vendored tool '$tool_name' links an external dependency: $dependency" >&2
+                  exit 1
+                  ;;
+              esac
+            done
+          }
+
+          for tool in yt-dlp ffmpeg ffprobe deno whisper-cli; do
+            source_path="$(resolve_vendored_tool "$tool")"
+            validate_arm64_tool "$source_path" "$tool"
+            validate_self_contained_tool "$source_path" "$tool"
+            rm -f "$TOOLS_DIR/$tool"
+            cp -f "$source_path" "$TOOLS_DIR/$tool"
+            chmod +x "$TOOLS_DIR/$tool"
+          done
+
+          copy_required_model "ggml-base.en.bin"
+          copy_required_model "ggml-base.en-encoder.mlmodelc"
+    postBuildScripts:
+      - name: Sign Nested Bundled Tools
+        script: |
+          set -euo pipefail
+
+          TOOLS_DIR="${TARGET_BUILD_DIR}/${UNLOCALIZED_RESOURCES_FOLDER_PATH}/Tools"
+
+          for tool in yt-dlp ffmpeg ffprobe deno whisper-cli; do
+            tool_path="${TOOLS_DIR}/${tool}"
+            if [[ -f "$tool_path" ]]; then
+              /usr/bin/codesign --force --sign "${EXPANDED_CODE_SIGN_IDENTITY}" --timestamp=none "$tool_path"
+            fi
+          done
+  MediaGetterTests:
+    type: bundle.unit-test
+    platform: macOS
+    deploymentTarget: "14.0"
+    sources:
+      - path: Tests/MediaGetterTests
+    dependencies:
+      - target: MediaGetter
+    settings:
+      base:
+        PRODUCT_NAME: MediaGetterTests
+        PRODUCT_BUNDLE_IDENTIFIER: com.bryan.mediagetter.tests
+  MediaGetterUITests:
+    type: bundle.ui-testing
+    platform: macOS
+    deploymentTarget: "14.0"
+    sources:
+      - path: Tests/MediaGetterUITests
+    dependencies:
+      - target: MediaGetter
+    settings:
+      base:
+        PRODUCT_NAME: MediaGetterUITests
+        PRODUCT_BUNDLE_IDENTIFIER: com.bryan.mediagetter.uitests
+schemes:
+  MediaGetter:
+    build:
+      targets:
+        MediaGetter: all
+        MediaGetterTests: [test]
+        MediaGetterUITests: [test]
+    test:
+      targets:
+        - name: MediaGetterTests
+        - name: MediaGetterUITests
+    run:
+      config: Debug
