@@ -155,6 +155,44 @@ struct PathPickerRow: View {
     }
 }
 
+struct SubtitleArtifactSection: View {
+    let artifacts: [JobArtifact]
+    let onPreview: (JobArtifact) -> Void
+    let onOpen: (JobArtifact) -> Void
+    let onReveal: (JobArtifact) -> Void
+
+    var body: some View {
+        if !artifacts.isEmpty {
+            VStack(alignment: .leading, spacing: 8) {
+                Text("Subtitle files")
+                    .font(.subheadline.weight(.semibold))
+
+                ForEach(artifacts) { artifact in
+                    VStack(alignment: .leading, spacing: 6) {
+                        Text(artifact.displayName)
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+
+                        HStack {
+                            Button("Preview") {
+                                onPreview(artifact)
+                            }
+
+                            Button("Open") {
+                                onOpen(artifact)
+                            }
+
+                            Button("Reveal") {
+                                onReveal(artifact)
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
 struct StatusBadge: View {
     let status: JobStatus
 

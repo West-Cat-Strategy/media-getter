@@ -2,9 +2,17 @@ import SwiftUI
 
 struct MediaGetterCommands: Commands {
     let appState: AppState
+    let appUpdateManager: AppUpdateManager
 
     var body: some Commands {
         SidebarCommands()
+
+        CommandGroup(after: .appInfo) {
+            Button("Check for Updates...") {
+                appUpdateManager.checkForUpdates()
+            }
+            .disabled(!appUpdateManager.canCheckForUpdates)
+        }
 
         CommandMenu("Media Studio") {
             Button("Paste URL") {
@@ -36,4 +44,3 @@ struct MediaGetterCommands: Commands {
         }
     }
 }
-

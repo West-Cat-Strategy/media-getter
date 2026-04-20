@@ -14,6 +14,7 @@
 		1BE13E6D7F6022EFFCB34F9C /* MediaGetterCommands.swift in Sources */ = {isa = PBXBuildFile; fileRef = 44886D6E27A68719B1072F23 /* MediaGetterCommands.swift */; };
 		215FBFC95DDFC6D2FAFD4FB5 /* HistoryWorkspaceView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 100CAC5CFC59C8008602B9F7 /* HistoryWorkspaceView.swift */; };
 		2A948C45DBFC7EFDF64B538A /* AppDelegate.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9B4C3FADF385C0EC55E7AEF6 /* AppDelegate.swift */; };
+		2ECC251DC9D1FC3020012057 /* Sparkle in Frameworks */ = {isa = PBXBuildFile; productRef = 4B07E7E796DD2D9697C2BC6E /* Sparkle */; };
 		38EDE0754DC7E30F27EF1DD0 /* MediaGetterTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 83BD0BC8DA0D3E3D9FBAA7E6 /* MediaGetterTests.swift */; };
 		42CE16965E5FEDE8114F4448 /* AppModels.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9EB926E8203C779385D52F7A /* AppModels.swift */; };
 		586F6A643208729AE4E43E0A /* HistoryStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = B47A0E769216EAB3FA0F3838 /* HistoryStore.swift */; };
@@ -31,6 +32,7 @@
 		DDCCC9A21B998A996795E133 /* TranscribeWorkspaceView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0F393BC52680F42F5C48F8C4 /* TranscribeWorkspaceView.swift */; };
 		E71DE82A717B51BB5CD9CB9D /* MediaServices.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8CA6B512CF370B3012A39A84 /* MediaServices.swift */; };
 		EAFA1447A130B98BCAC0CA9A /* MediaGetterUITests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8FB26C909EB97048C0F58B83 /* MediaGetterUITests.swift */; };
+		FA37C6217E3601A98C82A23B /* AppUpdateManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = D6FF34B60445CD3B2574C4B3 /* AppUpdateManager.swift */; };
 		FF06EDD29C5974B1C54CFB30 /* MediaGetterApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = 29407BE0DAD562F72FBB766E /* MediaGetterApp.swift */; };
 /* End PBXBuildFile section */
 
@@ -76,11 +78,23 @@
 		AB73807E4AEFFC4FB07BD3E5 /* ConvertWorkspaceView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ConvertWorkspaceView.swift; sourceTree = "<group>"; };
 		B47A0E769216EAB3FA0F3838 /* HistoryStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HistoryStore.swift; sourceTree = "<group>"; };
 		B6CD23A5BEF94B3D2E9C6BF4 /* DownloadWorkspaceView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DownloadWorkspaceView.swift; sourceTree = "<group>"; };
+		D6FF34B60445CD3B2574C4B3 /* AppUpdateManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppUpdateManager.swift; sourceTree = "<group>"; };
 		DE2CD4569EA8D51680E74166 /* TrimWorkspaceView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TrimWorkspaceView.swift; sourceTree = "<group>"; };
 		E8F1A2197EBB8DAAA24A8EBB /* ProcessRunner.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ProcessRunner.swift; sourceTree = "<group>"; };
 		EFEA3C10E446DA687B1720F3 /* FileHelpers.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FileHelpers.swift; sourceTree = "<group>"; };
 		FDEE0951CDE7747376B211C0 /* RootSplitView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RootSplitView.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
+
+/* Begin PBXFrameworksBuildPhase section */
+		0FBDFA2E66E1A3828D431EB6 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				2ECC251DC9D1FC3020012057 /* Sparkle in Frameworks */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXFrameworksBuildPhase section */
 
 /* Begin PBXGroup section */
 		0BCC80D38AAD88C9B9DC6101 /* App */ = {
@@ -124,6 +138,7 @@
 		3ECBB4B0A886EF76E4C5BE9D /* Services */ = {
 			isa = PBXGroup;
 			children = (
+				D6FF34B60445CD3B2574C4B3 /* AppUpdateManager.swift */,
 				8CA6B512CF370B3012A39A84 /* MediaServices.swift */,
 				E8F1A2197EBB8DAAA24A8EBB /* ProcessRunner.swift */,
 				AA61ED95BC959201E34780C9 /* ToolchainManager.swift */,
@@ -314,6 +329,7 @@
 			buildPhases = (
 				8AA5DF1844ACFA31DCA84013 /* Bundle CLI Tools */,
 				37ADEF4B57C1689294A7DD43 /* Sources */,
+				0FBDFA2E66E1A3828D431EB6 /* Frameworks */,
 				F78F90A81BA4717A068BBA52 /* Sign Nested Bundled Tools */,
 			);
 			buildRules = (
@@ -322,6 +338,7 @@
 			);
 			name = MediaGetter;
 			packageProductDependencies = (
+				4B07E7E796DD2D9697C2BC6E /* Sparkle */,
 			);
 			productName = MediaGetter;
 			productReference = 9F813E7D8E845999FC5701AB /* MediaGetter.app */;
@@ -357,6 +374,9 @@
 			);
 			mainGroup = 9FBA9D963CA4F542B58FABDE;
 			minimizedProjectReferenceProxies = 1;
+			packageReferences = (
+				92B29448C6C40C91ED4626E7 /* XCRemoteSwiftPackageReference "Sparkle" */,
+			);
 			preferredProjectObjectVersion = 77;
 			productRefGroup = C9435A2903D89223744620EF /* Products */;
 			projectDirPath = "";
@@ -397,6 +417,7 @@
 		};
 		F78F90A81BA4717A068BBA52 /* Sign Nested Bundled Tools */ = {
 			isa = PBXShellScriptBuildPhase;
+			alwaysOutOfDate = 1;
 			buildActionMask = 2147483647;
 			files = (
 			);
@@ -411,7 +432,7 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 			shellPath = /bin/sh;
-			shellScript = "set -euo pipefail\n\nTOOLS_DIR=\"${TARGET_BUILD_DIR}/${UNLOCALIZED_RESOURCES_FOLDER_PATH}/Tools\"\n\nfor tool in yt-dlp ffmpeg ffprobe deno whisper-cli; do\n  tool_path=\"${TOOLS_DIR}/${tool}\"\n  if [[ -f \"$tool_path\" ]]; then\n    /usr/bin/codesign --force --sign \"${EXPANDED_CODE_SIGN_IDENTITY}\" --timestamp=none \"$tool_path\"\n  fi\ndone\n";
+			shellScript = "set -euo pipefail\n\nif [[ \"${CODE_SIGNING_ALLOWED:-YES}\" != \"YES\" ]] || [[ -z \"${EXPANDED_CODE_SIGN_IDENTITY:-}\" ]]; then\n  echo \"Skipping nested bundled tool signing because no code signing identity is available.\"\n  exit 0\nfi\n\nTOOLS_DIR=\"${TARGET_BUILD_DIR}/${UNLOCALIZED_RESOURCES_FOLDER_PATH}/Tools\"\n\nfor tool in yt-dlp ffmpeg ffprobe deno whisper-cli; do\n  tool_path=\"${TOOLS_DIR}/${tool}\"\n  if [[ -f \"$tool_path\" ]]; then\n    /usr/bin/codesign --force --sign \"${EXPANDED_CODE_SIGN_IDENTITY}\" --timestamp=none \"$tool_path\"\n  fi\ndone\n";
 		};
 /* End PBXShellScriptBuildPhase section */
 
@@ -424,6 +445,7 @@
 				2A948C45DBFC7EFDF64B538A /* AppDelegate.swift in Sources */,
 				42CE16965E5FEDE8114F4448 /* AppModels.swift in Sources */,
 				AA4367FB25DDCC25AC688E0B /* AppState.swift in Sources */,
+				FA37C6217E3601A98C82A23B /* AppUpdateManager.swift in Sources */,
 				8DC9EDDD918F2862F74AA9FE /* ConvertWorkspaceView.swift in Sources */,
 				ADBC77C3EE5D4559D8CF5626 /* DownloadWorkspaceView.swift in Sources */,
 				10C98726395F9EE39098D861 /* FileHelpers.swift in Sources */,
@@ -502,6 +524,8 @@
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				COMBINE_HIDPI_IMAGES = YES;
 				ENABLE_HARDENED_RUNTIME = YES;
+				GENERATE_INFOPLIST_FILE = NO;
+				INFOPLIST_FILE = "Config/MediaGetter-Info.plist";
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
 					"@executable_path/../Frameworks",
@@ -568,10 +592,6 @@
 				GCC_WARN_UNINITIALIZED_AUTOS = YES_AGGRESSIVE;
 				GCC_WARN_UNUSED_FUNCTION = YES;
 				GCC_WARN_UNUSED_VARIABLE = YES;
-				GENERATE_INFOPLIST_FILE = YES;
-				INFOPLIST_KEY_CFBundleDisplayName = MediaGetter;
-				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.video";
-				INFOPLIST_KEY_NSHumanReadableCopyright = "Copyright 2026 Bryan";
 				MACOSX_DEPLOYMENT_TARGET = 14.0;
 				MARKETING_VERSION = 0.1.0;
 				MTL_ENABLE_DEBUG_INFO = INCLUDE_SOURCE;
@@ -627,7 +647,9 @@
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				COMBINE_HIDPI_IMAGES = YES;
-				ENABLE_HARDENED_RUNTIME = YES;
+				ENABLE_HARDENED_RUNTIME = NO;
+				GENERATE_INFOPLIST_FILE = NO;
+				INFOPLIST_FILE = "Config/MediaGetter-Info.plist";
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
 					"@executable_path/../Frameworks",
@@ -706,10 +728,6 @@
 				GCC_WARN_UNINITIALIZED_AUTOS = YES_AGGRESSIVE;
 				GCC_WARN_UNUSED_FUNCTION = YES;
 				GCC_WARN_UNUSED_VARIABLE = YES;
-				GENERATE_INFOPLIST_FILE = YES;
-				INFOPLIST_KEY_CFBundleDisplayName = MediaGetter;
-				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.video";
-				INFOPLIST_KEY_NSHumanReadableCopyright = "Copyright 2026 Bryan";
 				MACOSX_DEPLOYMENT_TARGET = 14.0;
 				MARKETING_VERSION = 0.1.0;
 				MTL_ENABLE_DEBUG_INFO = NO;
@@ -763,6 +781,25 @@
 			defaultConfigurationName = Debug;
 		};
 /* End XCConfigurationList section */
+
+/* Begin XCRemoteSwiftPackageReference section */
+		92B29448C6C40C91ED4626E7 /* XCRemoteSwiftPackageReference "Sparkle" */ = {
+			isa = XCRemoteSwiftPackageReference;
+			repositoryURL = "https://github.com/sparkle-project/Sparkle";
+			requirement = {
+				kind = upToNextMajorVersion;
+				minimumVersion = 2.9.1;
+			};
+		};
+/* End XCRemoteSwiftPackageReference section */
+
+/* Begin XCSwiftPackageProductDependency section */
+		4B07E7E796DD2D9697C2BC6E /* Sparkle */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = 92B29448C6C40C91ED4626E7 /* XCRemoteSwiftPackageReference "Sparkle" */;
+			productName = Sparkle;
+		};
+/* End XCSwiftPackageProductDependency section */
 	};
 	rootObject = 8483D1C6180E8AB2DF4F72D5 /* Project object */;
 }

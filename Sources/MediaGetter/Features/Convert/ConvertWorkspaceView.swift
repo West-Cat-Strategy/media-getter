@@ -86,10 +86,41 @@ struct ConvertWorkspaceView: View {
                         .padding(.top, 12)
                     }
 
+                    Toggle(
+                        "Generate subtitles after export",
+                        isOn: Binding(
+                            get: { appState.convertDraft.subtitleWorkflow.generatesSubtitles },
+                            set: {
+                                appState.convertDraft.subtitleWorkflow.sourcePolicy = $0 ? .generateOnly : .off
+                            }
+                        )
+                    )
+                    .accessibilityIdentifier(AccessibilityID.convertSubtitleToggle)
+
+                    if appState.convertDraft.subtitleWorkflow.generatesSubtitles {
+                        Picker("Generated output", selection: $appState.convertDraft.subtitleWorkflow.outputFormat) {
+                            ForEach(TranscriptionOutputFormat.allCases) { format in
+                                Text(format.title).tag(format)
+                            }
+                        }
+
+                        Label(
+                            appState.transcriptionRuntimeSummary,
+                            systemImage: appState.isTranscriptionReady ? "waveform" : "exclamationmark.triangle"
+                        )
+                        .font(.subheadline.weight(.semibold))
+
+                        Text(appState.transcriptionRuntimeDetail)
+                            .foregroundStyle(.secondary)
+                    }
+
                     Button("Add Convert Job") {
                         appState.enqueueConvert()
                     }
-                    .disabled(appState.convertDraft.inputURL == nil)
+                    .disabled(
+                        appState.convertDraft.inputURL == nil
+                            || (appState.convertDraft.subtitleWorkflow.needsLocalRuntime && !appState.isTranscriptionReady)
+                    )
                     .accessibilityIdentifier(AccessibilityID.convertQueueButton)
                 }
             }
@@ -97,4 +128,3 @@ struct ConvertWorkspaceView: View {
         }
     }
 }
-

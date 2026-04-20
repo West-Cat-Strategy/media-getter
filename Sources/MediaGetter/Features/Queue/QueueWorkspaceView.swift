@@ -29,6 +29,11 @@ struct QueueWorkspaceView: View {
                                                 .font(.headline)
                                             Text(job.request.subtitle)
                                                 .foregroundStyle(.secondary)
+                                            if job.request.isAutoSubtitleJob {
+                                                Text("Linked auto-subtitle job")
+                                                    .font(.caption)
+                                                    .foregroundStyle(.secondary)
+                                            }
                                         }
 
                                         Spacer()
@@ -76,17 +81,21 @@ struct QueueWorkspaceView: View {
                                             }
                                         }
 
-                                        if job.request.kind == .transcribe, let outputURL = job.outputURL {
-                                            Button("Preview Transcript") {
-                                                appState.queueStore.selectedJobID = job.id
-                                                appState.inspectorMode = .transcript
-                                            }
-
-                                            Button("Open Transcript") {
-                                                appState.openTranscript(outputURL)
-                                            }
-                                        }
                                     }
+
+                                    SubtitleArtifactSection(
+                                        artifacts: job.subtitleArtifacts,
+                                        onPreview: { artifact in
+                                            appState.queueStore.selectedJobID = job.id
+                                            appState.previewArtifact(artifact)
+                                        },
+                                        onOpen: { artifact in
+                                            appState.openTranscript(artifact.url)
+                                        },
+                                        onReveal: { artifact in
+                                            FileHelpers.reveal(artifact.url)
+                                        }
+                                    )
 
                                     if !job.logs.isEmpty {
                                         DisclosureGroup("Recent log output") {
@@ -101,6 +110,7 @@ struct QueueWorkspaceView: View {
                             }
                             .onTapGesture {
                                 appState.queueStore.selectedJobID = job.id
+                                appState.inspectorArtifactPath = nil
                             }
                         }
                     }

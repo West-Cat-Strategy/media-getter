@@ -1,0 +1,46 @@
+name: CI
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+    branches:
+      - main
+
+permissions:
+  contents: read
+
+jobs:
+  build-and-test:
+    runs-on: macos-15
+
+    steps:
+      - name: Check Out Repository
+        uses: actions/checkout@v4
+
+      - name: Install XcodeGen
+        run: |
+          if ! command -v xcodegen >/dev/null 2>&1; then
+            brew install xcodegen
+          fi
+
+      - name: Generate Project And Resolve Packages
+        run: |
+          xcodegen generate --spec project.yml
+          xcodebuild -resolvePackageDependencies -project MediaGetter.xcodeproj -scheme MediaGetter
+
+      - name: Verify Generated Project Files
+        run: git diff --exit-code -- MediaGetter.xcodeproj
+
+      - name: Run Unit Tests
+        run: |
+          xcodebuild test \
+            -project MediaGetter.xcodeproj \
+            -scheme MediaGetter \
+            -configuration Debug \
+            -derivedDataPath build/CI \
+            -destination 'platform=macOS,arch=arm64' \
+            -only-testing:MediaGetterTests \
+            -onlyUsePackageVersionsFromResolvedFile \
+            CODE_SIGNING_ALLOWED=NO

@@ -27,6 +27,11 @@ struct HistoryWorkspaceView: View {
                                         .font(.headline)
                                     Text(entry.subtitle)
                                         .foregroundStyle(.secondary)
+                                    if entry.isAutoSubtitleJob {
+                                        Text("Linked auto-subtitle job")
+                                            .font(.caption)
+                                            .foregroundStyle(.secondary)
+                                    }
                                     Text(entry.createdAt.formatted(date: .abbreviated, time: .shortened))
                                         .font(.caption)
                                         .foregroundStyle(.secondary)
@@ -54,21 +59,26 @@ struct HistoryWorkspaceView: View {
                                             }
                                         }
 
-                                        if entry.jobKind == .transcribe, let outputURL = entry.outputURL {
-                                            Button("Preview Transcript") {
-                                                appState.historyStore.selectedEntryID = entry.id
-                                                appState.inspectorMode = .transcript
-                                            }
-
-                                            Button("Open Transcript") {
-                                                appState.openTranscript(outputURL)
-                                            }
-                                        }
                                     }
+
+                                    SubtitleArtifactSection(
+                                        artifacts: entry.subtitleArtifacts,
+                                        onPreview: { artifact in
+                                            appState.historyStore.selectedEntryID = entry.id
+                                            appState.previewArtifact(artifact)
+                                        },
+                                        onOpen: { artifact in
+                                            appState.openTranscript(artifact.url)
+                                        },
+                                        onReveal: { artifact in
+                                            FileHelpers.reveal(artifact.url)
+                                        }
+                                    )
                                 }
                             }
                             .onTapGesture {
                                 appState.historyStore.selectedEntryID = entry.id
+                                appState.inspectorArtifactPath = nil
                             }
                         }
                     }

@@ -10,11 +10,11 @@ settings:
     ARCHS: arm64
     CURRENT_PROJECT_VERSION: 1
     MARKETING_VERSION: 0.1.0
-    GENERATE_INFOPLIST_FILE: true
-    INFOPLIST_KEY_CFBundleDisplayName: MediaGetter
-    INFOPLIST_KEY_LSApplicationCategoryType: public.app-category.video
-    INFOPLIST_KEY_NSHumanReadableCopyright: Copyright 2026 Bryan
     CODE_SIGN_STYLE: Automatic
+packages:
+  Sparkle:
+    url: https://github.com/sparkle-project/Sparkle
+    from: 2.9.1
 targets:
   MediaGetter:
     type: application
@@ -26,12 +26,20 @@ targets:
       - path: Resources
         excludes:
           - Tools
+    dependencies:
+      - package: Sparkle
     settings:
       base:
         PRODUCT_NAME: MediaGetter
         PRODUCT_BUNDLE_IDENTIFIER: com.bryan.mediagetter
+        GENERATE_INFOPLIST_FILE: false
+        INFOPLIST_FILE: Config/MediaGetter-Info.plist
         SWIFT_EMIT_LOC_STRINGS: NO
-        ENABLE_HARDENED_RUNTIME: YES
+      configs:
+        Debug:
+          ENABLE_HARDENED_RUNTIME: NO
+        Release:
+          ENABLE_HARDENED_RUNTIME: YES
     preBuildScripts:
       - name: Bundle CLI Tools
         outputFiles:
@@ -120,8 +128,14 @@ targets:
           copy_required_model "ggml-base.en-encoder.mlmodelc"
     postBuildScripts:
       - name: Sign Nested Bundled Tools
+        basedOnDependencyAnalysis: false
         script: |
           set -euo pipefail
+
+          if [[ "${CODE_SIGNING_ALLOWED:-YES}" != "YES" ]] || [[ -z "${EXPANDED_CODE_SIGN_IDENTITY:-}" ]]; then
+            echo "Skipping nested bundled tool signing because no code signing identity is available."
+            exit 0
+          fi
 
           TOOLS_DIR="${TARGET_BUILD_DIR}/${UNLOCALIZED_RESOURCES_FOLDER_PATH}/Tools"
 

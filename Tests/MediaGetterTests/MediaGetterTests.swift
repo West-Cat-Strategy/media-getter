@@ -66,7 +66,10 @@ final class MediaGetterTests: XCTestCase {
                 destinationDirectory: URL(fileURLWithPath: "/tmp/downloads", isDirectory: true),
                 selectedFormatID: "137+140",
                 preset: .mp4Video,
-                includeSubtitles: true,
+                subtitleWorkflow: SubtitleWorkflowOptions(
+                    sourcePolicy: .preferSourceThenGenerate,
+                    outputFormat: .srt
+                ),
                 filenameTemplate: "%(title)s",
                 overwriteExisting: true
             ),
@@ -81,8 +84,47 @@ final class MediaGetterTests: XCTestCase {
         XCTAssertTrue(command.arguments.contains("--merge-output-format"))
         XCTAssertTrue(command.arguments.contains("mp4"))
         XCTAssertTrue(command.arguments.contains("--write-subs"))
+        XCTAssertFalse(command.arguments.contains("--embed-subs"))
         XCTAssertTrue(command.arguments.contains("137+140"))
         XCTAssertEqual(command.environment["PATH"], "/tmp/tools:/usr/bin:/bin:/usr/sbin:/sbin")
+    }
+
+    func testDownloadArtifactDetectionCapturesSubtitleSidecars() {
+        let service = DownloadService(
+            toolchainManager: ToolchainManager(overrideToolsDirectory: FileManager.default.temporaryDirectory),
+            processRunner: ProcessRunner()
+        )
+
+        let before = [
+            DownloadService.DirectorySnapshotEntry(
+                path: "/tmp/downloads/sample-output.mp4",
+                sizeBytes: 10,
+                modificationDate: .distantPast
+            )
+        ]
+        let after = [
+            DownloadService.DirectorySnapshotEntry(
+                path: "/tmp/downloads/sample-output.mp4",
+                sizeBytes: 20,
+                modificationDate: .now
+            ),
+            DownloadService.DirectorySnapshotEntry(
+                path: "/tmp/downloads/sample-output.en.vtt",
+                sizeBytes: 8,
+                modificationDate: .now
+            )
+        ]
+
+        let artifacts = service.detectArtifacts(
+            before: before,
+            after: after,
+            primaryOutputURL: URL(fileURLWithPath: "/tmp/downloads/sample-output.mp4")
+        )
+
+        XCTAssertEqual(artifacts.count, 2)
+        XCTAssertEqual(artifacts.first?.kind, .media)
+        XCTAssertEqual(artifacts.last?.kind, .subtitle)
+        XCTAssertEqual(artifacts.last?.url.lastPathComponent, "sample-output.en.vtt")
     }
 
     func testTranscodeCommandUsesPresetDefaults() {
@@ -96,6 +138,7 @@ final class MediaGetterTests: XCTestCase {
                 inputURL: URL(fileURLWithPath: "/tmp/source.mov"),
                 destinationDirectory: URL(fileURLWithPath: "/tmp/exports", isDirectory: true),
                 preset: .extractAudio,
+                subtitleWorkflow: .off(format: .srt),
                 containerOverride: nil,
                 videoCodecOverride: nil,
                 audioCodecOverride: nil,
@@ -131,6 +174,7 @@ final class MediaGetterTests: XCTestCase {
                 inputURL: URL(fileURLWithPath: "/tmp/source.mp4"),
                 destinationDirectory: URL(fileURLWithPath: "/tmp"),
                 preset: .trimClip,
+                subtitleWorkflow: .off(format: .srt),
                 range: TrimRange(start: 0, end: 12),
                 allowFastCopy: true,
                 overwriteExisting: true
@@ -143,6 +187,7 @@ final class MediaGetterTests: XCTestCase {
                 inputURL: URL(fileURLWithPath: "/tmp/source.mp4"),
                 destinationDirectory: URL(fileURLWithPath: "/tmp"),
                 preset: .trimClip,
+                subtitleWorkflow: .off(format: .srt),
                 range: TrimRange(start: 5, end: 12),
                 allowFastCopy: true,
                 overwriteExisting: true
@@ -213,6 +258,157 @@ final class MediaGetterTests: XCTestCase {
         XCTAssertTrue(command.arguments.contains("/tmp/exports/interview-transcript"))
         XCTAssertTrue(command.arguments.contains("-l"))
         XCTAssertTrue(command.arguments.contains("en"))
+    }
+
+    @MainActor
+    func testPreferencesStorePersistsSubtitleDefaults() {
+        let suiteName = "MediaGetterTests.\(UUID().uuidString)"
+        let defaults = UserDefaults(suiteName: suiteName)!
+        defer {
+            defaults.removePersistentDomain(forName: suiteName)
+        }
+
+        let store = PreferencesStore(defaults: defaults)
+        XCTAssertEqual(store.defaultDownloadSubtitlePolicy, .preferSourceThenGenerate)
+        XCTAssertEqual(store.defaultSubtitleOutputFormat, .srt)
+        XCTAssertFalse(store.defaultConvertAutoSubtitles)
+        XCTAssertFalse(store.defaultTrimAutoSubtitles)
+
+        store.defaultDownloadSubtitlePolicy = .generateOnly
+        store.defaultConvertAutoSubtitles = true
+        store.defaultTrimAutoSubtitles = true
+        store.defaultSubtitleOutputFormat = .vtt
+
+        let reloaded = PreferencesStore(defaults: defaults)
+        XCTAssertEqual(reloaded.defaultDownloadSubtitlePolicy, .generateOnly)
+        XCTAssertTrue(reloaded.defaultConvertAutoSubtitles)
+        XCTAssertTrue(reloaded.defaultTrimAutoSubtitles)
+        XCTAssertEqual(reloaded.defaultSubtitleOutputFormat, .vtt)
+    }
+
+    @MainActor
+    func testAutoSubtitleFollowUpUsesFallbackPolicyWhenNoSourceSubtitleArtifactsExist() {
+        let appState = AppState(
+            preferencesStore: PreferencesStore(defaults: UserDefaults(suiteName: "MediaGetterTests.\(UUID().uuidString)")!)
+        )
+        let outputURL = URL(fileURLWithPath: "/tmp/sample-output.mp4")
+        let workflowID = UUID()
+        let request = DownloadRequest(
+            sourceURLString: "https://example.com/video",
+            destinationDirectory: URL(fileURLWithPath: "/tmp", isDirectory: true),
+            selectedFormatID: "best",
+            preset: .mp4Video,
+            subtitleWorkflow: SubtitleWorkflowOptions(
+                sourcePolicy: .preferSourceThenGenerate,
+                outputFormat: .srt
+            ),
+            filenameTemplate: "%(title)s",
+            overwriteExisting: true
+        )
+        let job = JobRecord(
+            id: UUID(),
+            request: JobRequest(
+                workflowID: workflowID,
+                kind: .download,
+                title: "Sample",
+                subtitle: OutputPresetID.mp4Video.title,
+                source: .remote("https://example.com/video"),
+                preset: .mp4Video,
+                transcriptionOutputFormat: nil,
+                payload: .download(request)
+            ),
+            status: .completed,
+            progress: 1,
+            phase: outputURL.lastPathComponent,
+            logs: [],
+            artifacts: [JobArtifact(kind: .media, url: outputURL, isPrimary: true)],
+            createdAt: Date(),
+            startedAt: Date(),
+            completedAt: Date(),
+            errorMessage: nil
+        )
+
+        let followUp = appState.makeAutoSubtitleJobRequest(for: job)
+
+        XCTAssertEqual(followUp?.workflowID, workflowID)
+        XCTAssertEqual(followUp?.parentJobID, job.id)
+        XCTAssertEqual(followUp?.subtitle, "Auto subtitles (.srt)")
+        XCTAssertEqual(followUp?.transcriptionOutputFormat, .srt)
+    }
+
+    @MainActor
+    func testAutoSubtitleFollowUpSkipsWhenSourceSubtitleArtifactsExist() {
+        let appState = AppState(
+            preferencesStore: PreferencesStore(defaults: UserDefaults(suiteName: "MediaGetterTests.\(UUID().uuidString)")!)
+        )
+        let outputURL = URL(fileURLWithPath: "/tmp/sample-output.mp4")
+        let subtitleURL = URL(fileURLWithPath: "/tmp/sample-output.en.vtt")
+        let request = DownloadRequest(
+            sourceURLString: "https://example.com/video",
+            destinationDirectory: URL(fileURLWithPath: "/tmp", isDirectory: true),
+            selectedFormatID: "best",
+            preset: .mp4Video,
+            subtitleWorkflow: SubtitleWorkflowOptions(
+                sourcePolicy: .preferSourceThenGenerate,
+                outputFormat: .srt
+            ),
+            filenameTemplate: "%(title)s",
+            overwriteExisting: true
+        )
+        let job = JobRecord(
+            id: UUID(),
+            request: JobRequest(
+                kind: .download,
+                title: "Sample",
+                subtitle: OutputPresetID.mp4Video.title,
+                source: .remote("https://example.com/video"),
+                preset: .mp4Video,
+                transcriptionOutputFormat: nil,
+                payload: .download(request)
+            ),
+            status: .completed,
+            progress: 1,
+            phase: outputURL.lastPathComponent,
+            logs: [],
+            artifacts: [
+                JobArtifact(kind: .media, url: outputURL, isPrimary: true),
+                JobArtifact(kind: .subtitle, url: subtitleURL, isPrimary: false)
+            ],
+            createdAt: Date(),
+            startedAt: Date(),
+            completedAt: Date(),
+            errorMessage: nil
+        )
+
+        XCTAssertNil(appState.makeAutoSubtitleJobRequest(for: job))
+    }
+
+    func testHistoryEntryDecodesLegacyOutputPathIntoArtifacts() throws {
+        let json = """
+        {
+          "id": "E65094A1-1682-4F79-B07F-BD1B2C8A8E6D",
+          "jobKind": "transcribe",
+          "title": "Legacy Transcript",
+          "subtitle": "Plain Text (.txt)",
+          "source": {
+            "id": "A33F72C8-5A5F-4B12-B9DD-BE8EC6923B81",
+            "localFilePath": "/tmp/source.mov",
+            "displayName": "source.mov"
+          },
+          "outputPath": "/tmp/source-transcript.txt",
+          "createdAt": "2026-04-20T22:00:00Z",
+          "transcriptionOutputFormat": "txt",
+          "summary": "Legacy transcript"
+        }
+        """
+
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .iso8601
+        let entry = try decoder.decode(HistoryEntry.self, from: Data(json.utf8))
+
+        XCTAssertEqual(entry.outputURL?.path, "/tmp/source-transcript.txt")
+        XCTAssertEqual(entry.primaryArtifact?.kind, .transcript)
+        XCTAssertEqual(entry.subtitleArtifacts.count, 1)
     }
 
     func testTranscriptionExecuteHonorsExistingOutputWhenOverwriteDisabled() async throws {

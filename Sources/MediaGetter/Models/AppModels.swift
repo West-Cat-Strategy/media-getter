@@ -243,6 +243,23 @@ enum TranscriptionOutputFormat: String, Codable, CaseIterable, Identifiable {
         rawValue
     }
 
+    var shortTitle: String {
+        switch self {
+        case .txt: ".txt"
+        case .srt: ".srt"
+        case .vtt: ".vtt"
+        }
+    }
+
+    var artifactKind: JobArtifactKind {
+        switch self {
+        case .txt:
+            .transcript
+        case .srt, .vtt:
+            .subtitle
+        }
+    }
+
     var whisperFlag: String {
         switch self {
         case .txt:
@@ -251,6 +268,133 @@ enum TranscriptionOutputFormat: String, Codable, CaseIterable, Identifiable {
             "--output-srt"
         case .vtt:
             "--output-vtt"
+        }
+    }
+}
+
+enum SubtitleSourcePolicy: String, Codable, CaseIterable, Identifiable {
+    case off
+    case sourceOnly
+    case generateOnly
+    case preferSourceThenGenerate
+
+    var id: Self { self }
+
+    var title: String {
+        switch self {
+        case .off:
+            "Off"
+        case .sourceOnly:
+            "Source subtitles only"
+        case .generateOnly:
+            "Generate locally only"
+        case .preferSourceThenGenerate:
+            "Prefer source, generate fallback"
+        }
+    }
+
+    var detail: String {
+        switch self {
+        case .off:
+            "Skip subtitle work for this export."
+        case .sourceOnly:
+            "Keep subtitle handling to files provided by the source download."
+        case .generateOnly:
+            "Create a local English subtitle file after the export finishes."
+        case .preferSourceThenGenerate:
+            "Use source subtitles when they arrive as files, otherwise generate a local English subtitle file."
+        }
+    }
+
+    var requestsSourceSubtitles: Bool {
+        switch self {
+        case .sourceOnly, .preferSourceThenGenerate:
+            true
+        case .off, .generateOnly:
+            false
+        }
+    }
+
+    var generatesSubtitles: Bool {
+        switch self {
+        case .generateOnly, .preferSourceThenGenerate:
+            true
+        case .off, .sourceOnly:
+            false
+        }
+    }
+}
+
+struct SubtitleWorkflowOptions: Codable, Equatable {
+    var sourcePolicy: SubtitleSourcePolicy
+    var outputFormat: TranscriptionOutputFormat
+
+    static func off(format: TranscriptionOutputFormat) -> SubtitleWorkflowOptions {
+        SubtitleWorkflowOptions(sourcePolicy: .off, outputFormat: format)
+    }
+
+    static func generateOnly(format: TranscriptionOutputFormat) -> SubtitleWorkflowOptions {
+        SubtitleWorkflowOptions(sourcePolicy: .generateOnly, outputFormat: format)
+    }
+
+    var requestsSourceSubtitles: Bool {
+        sourcePolicy.requestsSourceSubtitles
+    }
+
+    var generatesSubtitles: Bool {
+        sourcePolicy.generatesSubtitles
+    }
+
+    var needsLocalRuntime: Bool {
+        generatesSubtitles
+    }
+
+    var showsOutputFormatPicker: Bool {
+        generatesSubtitles
+    }
+
+    var isEnabled: Bool {
+        sourcePolicy != .off
+    }
+}
+
+enum JobArtifactKind: String, Codable {
+    case media
+    case subtitle
+    case transcript
+}
+
+struct JobArtifact: Codable, Equatable, Identifiable {
+    var id: UUID
+    var kind: JobArtifactKind
+    var path: String
+    var displayName: String
+    var isPrimary: Bool
+
+    init(
+        id: UUID = UUID(),
+        kind: JobArtifactKind,
+        url: URL,
+        displayName: String? = nil,
+        isPrimary: Bool = false
+    ) {
+        self.id = id
+        self.kind = kind
+        self.path = url.path
+        self.displayName = displayName ?? url.lastPathComponent
+        self.isPrimary = isPrimary
+    }
+
+    var url: URL {
+        URL(fileURLWithPath: path)
+    }
+
+    var isSubtitleArtifact: Bool {
+        switch kind {
+        case .subtitle, .transcript:
+            true
+        case .media:
+            false
         }
     }
 }
@@ -523,7 +667,7 @@ struct DownloadRequest: Equatable {
     var destinationDirectory: URL
     var selectedFormatID: String
     var preset: OutputPresetID
-    var includeSubtitles: Bool
+    var subtitleWorkflow: SubtitleWorkflowOptions
     var filenameTemplate: String
     var overwriteExisting: Bool
 }
@@ -532,6 +676,7 @@ struct ConvertRequest: Equatable {
     var inputURL: URL
     var destinationDirectory: URL
     var preset: OutputPresetID
+    var subtitleWorkflow: SubtitleWorkflowOptions
     var containerOverride: String?
     var videoCodecOverride: String?
     var audioCodecOverride: String?
@@ -544,6 +689,7 @@ struct TrimRequest: Equatable {
     var inputURL: URL
     var destinationDirectory: URL
     var preset: OutputPresetID
+    var subtitleWorkflow: SubtitleWorkflowOptions
     var range: TrimRange
     var allowFastCopy: Bool
     var overwriteExisting: Bool
@@ -565,6 +711,8 @@ enum JobPayload: Equatable {
 
 struct JobRequest: Identifiable, Equatable {
     var id: UUID = UUID()
+    var workflowID: UUID = UUID()
+    var parentJobID: UUID?
     var kind: JobKind
     var title: String
     var subtitle: String
@@ -572,6 +720,10 @@ struct JobRequest: Identifiable, Equatable {
     var preset: OutputPresetID?
     var transcriptionOutputFormat: TranscriptionOutputFormat?
     var payload: JobPayload
+
+    var isAutoSubtitleJob: Bool {
+        kind == .transcribe && parentJobID != nil
+    }
 }
 
 struct JobRecord: Identifiable, Equatable {
@@ -581,11 +733,69 @@ struct JobRecord: Identifiable, Equatable {
     var progress: Double
     var phase: String
     var logs: [String]
-    var outputURL: URL?
+    var artifacts: [JobArtifact]
     var createdAt: Date
     var startedAt: Date?
     var completedAt: Date?
     var errorMessage: String?
+
+    init(
+        id: UUID,
+        request: JobRequest,
+        status: JobStatus,
+        progress: Double,
+        phase: String,
+        logs: [String],
+        outputURL: URL? = nil,
+        artifacts: [JobArtifact] = [],
+        createdAt: Date,
+        startedAt: Date?,
+        completedAt: Date?,
+        errorMessage: String?
+    ) {
+        self.id = id
+        self.request = request
+        self.status = status
+        self.progress = progress
+        self.phase = phase
+        self.logs = logs
+        self.artifacts = Self.resolvedArtifacts(outputURL: outputURL, artifacts: artifacts, request: request)
+        self.createdAt = createdAt
+        self.startedAt = startedAt
+        self.completedAt = completedAt
+        self.errorMessage = errorMessage
+    }
+
+    var outputURL: URL? {
+        primaryArtifact?.url
+    }
+
+    var primaryArtifact: JobArtifact? {
+        artifacts.first(where: \.isPrimary) ?? artifacts.first
+    }
+
+    var subtitleArtifacts: [JobArtifact] {
+        artifacts.filter(\.isSubtitleArtifact)
+    }
+
+    private static func resolvedArtifacts(outputURL: URL?, artifacts: [JobArtifact], request: JobRequest) -> [JobArtifact] {
+        guard artifacts.isEmpty, let outputURL else { return artifacts }
+        return [
+            JobArtifact(
+                kind: defaultArtifactKind(for: request),
+                url: outputURL,
+                isPrimary: true
+            )
+        ]
+    }
+
+    private static func defaultArtifactKind(for request: JobRequest) -> JobArtifactKind {
+        if request.kind == .transcribe, let format = request.transcriptionOutputFormat {
+            return format.artifactKind
+        }
+
+        return .media
+    }
 }
 
 struct HistoryEntry: Codable, Equatable, Identifiable {
@@ -594,15 +804,150 @@ struct HistoryEntry: Codable, Equatable, Identifiable {
     var title: String
     var subtitle: String
     var source: MediaSource
-    var outputPath: String?
+    var workflowID: UUID?
+    var parentJobID: UUID?
+    var artifacts: [JobArtifact]
     var createdAt: Date
     var preset: OutputPresetID?
     var transcriptionOutputFormat: TranscriptionOutputFormat?
     var summary: String
 
+    init(
+        id: UUID,
+        jobKind: JobKind,
+        title: String,
+        subtitle: String,
+        source: MediaSource,
+        workflowID: UUID? = nil,
+        parentJobID: UUID? = nil,
+        outputPath: String? = nil,
+        artifacts: [JobArtifact] = [],
+        createdAt: Date,
+        preset: OutputPresetID?,
+        transcriptionOutputFormat: TranscriptionOutputFormat?,
+        summary: String
+    ) {
+        self.id = id
+        self.jobKind = jobKind
+        self.title = title
+        self.subtitle = subtitle
+        self.source = source
+        self.workflowID = workflowID
+        self.parentJobID = parentJobID
+        self.artifacts = Self.resolvedArtifacts(
+            jobKind: jobKind,
+            outputPath: outputPath,
+            artifacts: artifacts,
+            transcriptionOutputFormat: transcriptionOutputFormat
+        )
+        self.createdAt = createdAt
+        self.preset = preset
+        self.transcriptionOutputFormat = transcriptionOutputFormat
+        self.summary = summary
+    }
+
+    var outputPath: String? {
+        outputURL?.path
+    }
+
     var outputURL: URL? {
-        guard let outputPath else { return nil }
-        return URL(fileURLWithPath: outputPath)
+        primaryArtifact?.url
+    }
+
+    var primaryArtifact: JobArtifact? {
+        artifacts.first(where: \.isPrimary) ?? artifacts.first
+    }
+
+    var subtitleArtifacts: [JobArtifact] {
+        artifacts.filter(\.isSubtitleArtifact)
+    }
+
+    var isAutoSubtitleJob: Bool {
+        jobKind == .transcribe && parentJobID != nil
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        let legacyContainer = try decoder.container(keyedBy: LegacyCodingKeys.self)
+
+        id = try container.decode(UUID.self, forKey: .id)
+        jobKind = try container.decode(JobKind.self, forKey: .jobKind)
+        title = try container.decode(String.self, forKey: .title)
+        subtitle = try container.decode(String.self, forKey: .subtitle)
+        source = try container.decode(MediaSource.self, forKey: .source)
+        workflowID = try container.decodeIfPresent(UUID.self, forKey: .workflowID)
+        parentJobID = try container.decodeIfPresent(UUID.self, forKey: .parentJobID)
+        createdAt = try container.decode(Date.self, forKey: .createdAt)
+        preset = try container.decodeIfPresent(OutputPresetID.self, forKey: .preset)
+        transcriptionOutputFormat = try container.decodeIfPresent(TranscriptionOutputFormat.self, forKey: .transcriptionOutputFormat)
+        summary = try container.decode(String.self, forKey: .summary)
+
+        if let artifacts = try container.decodeIfPresent([JobArtifact].self, forKey: .artifacts) {
+            self.artifacts = artifacts
+        } else {
+            let outputPath = try legacyContainer.decodeIfPresent(String.self, forKey: .outputPath)
+            self.artifacts = Self.resolvedArtifacts(
+                jobKind: jobKind,
+                outputPath: outputPath,
+                artifacts: [],
+                transcriptionOutputFormat: transcriptionOutputFormat
+            )
+        }
+    }
+
+    func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(id, forKey: .id)
+        try container.encode(jobKind, forKey: .jobKind)
+        try container.encode(title, forKey: .title)
+        try container.encode(subtitle, forKey: .subtitle)
+        try container.encode(source, forKey: .source)
+        try container.encodeIfPresent(workflowID, forKey: .workflowID)
+        try container.encodeIfPresent(parentJobID, forKey: .parentJobID)
+        try container.encode(artifacts, forKey: .artifacts)
+        try container.encodeIfPresent(outputPath, forKey: .outputPath)
+        try container.encode(createdAt, forKey: .createdAt)
+        try container.encodeIfPresent(preset, forKey: .preset)
+        try container.encodeIfPresent(transcriptionOutputFormat, forKey: .transcriptionOutputFormat)
+        try container.encode(summary, forKey: .summary)
+    }
+
+    private static func resolvedArtifacts(
+        jobKind: JobKind,
+        outputPath: String?,
+        artifacts: [JobArtifact],
+        transcriptionOutputFormat: TranscriptionOutputFormat?
+    ) -> [JobArtifact] {
+        guard artifacts.isEmpty, let outputPath else { return artifacts }
+        let url = URL(fileURLWithPath: outputPath)
+        let kind: JobArtifactKind
+        if jobKind == .transcribe {
+            kind = transcriptionOutputFormat?.artifactKind ?? .transcript
+        } else {
+            kind = .media
+        }
+
+        return [JobArtifact(kind: kind, url: url, isPrimary: true)]
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case id
+        case jobKind
+        case title
+        case subtitle
+        case source
+        case workflowID
+        case parentJobID
+        case artifacts
+        case outputPath
+        case createdAt
+        case preset
+        case transcriptionOutputFormat
+        case summary
+    }
+
+    private enum LegacyCodingKeys: String, CodingKey {
+        case outputPath
     }
 }
 
@@ -636,8 +981,34 @@ enum JobEvent: Equatable {
 }
 
 struct JobResult: Equatable {
-    var outputURL: URL?
+    var artifacts: [JobArtifact]
     var summary: String
+
+    init(outputURL: URL?, summary: String, artifactKind: JobArtifactKind = .media) {
+        if let outputURL {
+            self.artifacts = [JobArtifact(kind: artifactKind, url: outputURL, isPrimary: true)]
+        } else {
+            self.artifacts = []
+        }
+        self.summary = summary
+    }
+
+    init(artifacts: [JobArtifact], summary: String) {
+        self.artifacts = artifacts
+        self.summary = summary
+    }
+
+    var outputURL: URL? {
+        artifacts.first(where: \.isPrimary)?.url ?? artifacts.first?.url
+    }
+
+    var primaryArtifact: JobArtifact? {
+        artifacts.first(where: \.isPrimary) ?? artifacts.first
+    }
+
+    var subtitleArtifacts: [JobArtifact] {
+        artifacts.filter(\.isSubtitleArtifact)
+    }
 }
 
 struct DownloadDraft: Equatable {
@@ -645,7 +1016,7 @@ struct DownloadDraft: Equatable {
     var selectedPreset: OutputPresetID = .mp4Video
     var selectedFormatID: String = "bestvideo*+bestaudio/best"
     var destinationDirectoryPath: String = ""
-    var includeSubtitles: Bool = false
+    var subtitleWorkflow: SubtitleWorkflowOptions = .off(format: .srt)
     var filenameTemplate: String = "%(title)s"
     var metadata: MediaMetadata?
     var isProbing: Bool = false
@@ -656,6 +1027,7 @@ struct ConvertDraft: Equatable {
     var metadata: MediaMetadata?
     var selectedPreset: OutputPresetID = .mp4Video
     var destinationDirectoryPath: String = ""
+    var subtitleWorkflow: SubtitleWorkflowOptions = .off(format: .srt)
     var containerOverride: String = ""
     var videoCodecOverride: String = ""
     var audioCodecOverride: String = ""
@@ -667,7 +1039,7 @@ struct TranscribeDraft: Equatable {
     var inputURL: URL?
     var metadata: MediaMetadata?
     var destinationDirectoryPath: String = ""
-    var outputFormat: TranscriptionOutputFormat = .txt
+    var outputFormat: TranscriptionOutputFormat = .srt
 }
 
 struct TrimDraft {
@@ -675,6 +1047,7 @@ struct TrimDraft {
     var metadata: MediaMetadata?
     var selectedPreset: OutputPresetID = .trimClip
     var destinationDirectoryPath: String = ""
+    var subtitleWorkflow: SubtitleWorkflowOptions = .off(format: .srt)
     var range: TrimRange = .init(start: 0, end: 15)
     var allowFastCopy: Bool = true
     var timelineFrames: [ThumbnailFrame] = []

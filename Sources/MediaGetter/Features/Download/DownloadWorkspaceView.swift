@@ -90,8 +90,6 @@ struct DownloadWorkspaceView: View {
                             }
                         }
 
-                        Toggle("Include subtitles when available", isOn: $appState.downloadDraft.includeSubtitles)
-
                         TextField("Filename template", text: $appState.downloadDraft.filenameTemplate)
 
                         PathPickerRow(
@@ -104,7 +102,45 @@ struct DownloadWorkspaceView: View {
                         Button("Add Download Job") {
                             appState.enqueueDownload()
                         }
+                        .disabled(
+                            appState.downloadDraft.subtitleWorkflow.needsLocalRuntime && !appState.isTranscriptionReady
+                        )
                         .accessibilityIdentifier(AccessibilityID.downloadQueueButton)
+                    }
+
+                    StudioCard {
+                        Text("Subtitles")
+                            .font(.headline)
+
+                        Picker("Strategy", selection: $appState.downloadDraft.subtitleWorkflow.sourcePolicy) {
+                            ForEach(SubtitleSourcePolicy.allCases) { policy in
+                                Text(policy.title).tag(policy)
+                            }
+                        }
+                        .accessibilityIdentifier(AccessibilityID.downloadSubtitlePolicyPicker)
+
+                        Text(appState.downloadDraft.subtitleWorkflow.sourcePolicy.detail)
+                            .foregroundStyle(.secondary)
+
+                        if appState.downloadDraft.subtitleWorkflow.showsOutputFormatPicker {
+                            Picker("Generated output", selection: $appState.downloadDraft.subtitleWorkflow.outputFormat) {
+                                ForEach(TranscriptionOutputFormat.allCases) { format in
+                                    Text(format.title).tag(format)
+                                }
+                            }
+                            .accessibilityIdentifier(AccessibilityID.downloadSubtitleFormatPicker)
+                        }
+
+                        if appState.downloadDraft.subtitleWorkflow.needsLocalRuntime {
+                            Label(
+                                appState.transcriptionRuntimeSummary,
+                                systemImage: appState.isTranscriptionReady ? "waveform" : "exclamationmark.triangle"
+                            )
+                            .font(.subheadline.weight(.semibold))
+
+                            Text(appState.transcriptionRuntimeDetail)
+                                .foregroundStyle(.secondary)
+                        }
                     }
                 }
             }
@@ -112,4 +148,3 @@ struct DownloadWorkspaceView: View {
         }
     }
 }
-

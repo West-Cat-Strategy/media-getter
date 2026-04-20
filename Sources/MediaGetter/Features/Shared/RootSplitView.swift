@@ -177,7 +177,7 @@ private struct InspectorPanel: View {
                             path: transcriptPath
                         )
                     } else {
-                        Text("Select a completed transcription job to preview the transcript.")
+                        Text("Select a subtitle or transcript file to preview it.")
                             .foregroundStyle(.secondary)
                     }
                 }

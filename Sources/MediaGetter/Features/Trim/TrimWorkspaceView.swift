@@ -42,6 +42,74 @@ struct TrimWorkspaceView: View {
                     )
                 }
 
+                StudioCard {
+                    Picker("Trim preset", selection: $appState.trimDraft.selectedPreset) {
+                        ForEach(OutputPresetID.trimPresets) { preset in
+                            Text(preset.title).tag(preset)
+                        }
+                    }
+                    .onChange(of: appState.trimDraft.selectedPreset) { _, _ in
+                        appState.refreshTrimPlan()
+                    }
+
+                    Toggle("Prefer stream copy when safe", isOn: Binding(
+                        get: { appState.trimDraft.allowFastCopy },
+                        set: {
+                            appState.trimDraft.allowFastCopy = $0
+                            appState.refreshTrimPlan()
+                        }
+                    ))
+
+                    Toggle(
+                        "Generate subtitles after export",
+                        isOn: Binding(
+                            get: { appState.trimDraft.subtitleWorkflow.generatesSubtitles },
+                            set: {
+                                appState.trimDraft.subtitleWorkflow.sourcePolicy = $0 ? .generateOnly : .off
+                            }
+                        )
+                    )
+                    .accessibilityIdentifier(AccessibilityID.trimSubtitleToggle)
+
+                    if appState.trimDraft.subtitleWorkflow.generatesSubtitles {
+                        Picker("Generated output", selection: $appState.trimDraft.subtitleWorkflow.outputFormat) {
+                            ForEach(TranscriptionOutputFormat.allCases) { format in
+                                Text(format.title).tag(format)
+                            }
+                        }
+
+                        Label(
+                            appState.transcriptionRuntimeSummary,
+                            systemImage: appState.isTranscriptionReady ? "waveform" : "exclamationmark.triangle"
+                        )
+                        .font(.subheadline.weight(.semibold))
+
+                        Text(appState.transcriptionRuntimeDetail)
+                            .foregroundStyle(.secondary)
+                    }
+
+                    PathPickerRow(
+                        title: "Destination folder",
+                        path: appState.trimDraft.destinationDirectoryPath
+                    ) {
+                        appState.chooseDestinationFolder(for: .trim)
+                    }
+
+                    Text("Strategy: \(appState.trimDraft.currentPlan.strategy.rawValue)")
+                        .font(.headline)
+                    Text(appState.trimDraft.currentPlan.reason)
+                        .foregroundStyle(.secondary)
+
+                    Button("Add Trim Job") {
+                        appState.enqueueTrim()
+                    }
+                    .disabled(
+                        appState.trimDraft.inputURL == nil
+                            || (appState.trimDraft.subtitleWorkflow.needsLocalRuntime && !appState.isTranscriptionReady)
+                    )
+                    .accessibilityIdentifier(AccessibilityID.trimQueueButton)
+                }
+
                 if appState.trimDraft.inputURL != nil {
                     StudioCard {
                         VideoPlayer(player: appState.trimPlayer)
@@ -118,40 +186,6 @@ struct TrimWorkspaceView: View {
                             }
                         }
                         .textFieldStyle(.roundedBorder)
-
-                        Picker("Trim preset", selection: $appState.trimDraft.selectedPreset) {
-                            ForEach(OutputPresetID.trimPresets) { preset in
-                                Text(preset.title).tag(preset)
-                            }
-                        }
-                        .onChange(of: appState.trimDraft.selectedPreset) { _, _ in
-                            appState.refreshTrimPlan()
-                        }
-
-                        Toggle("Prefer stream copy when safe", isOn: Binding(
-                            get: { appState.trimDraft.allowFastCopy },
-                            set: {
-                                appState.trimDraft.allowFastCopy = $0
-                                appState.refreshTrimPlan()
-                            }
-                        ))
-
-                        PathPickerRow(
-                            title: "Destination folder",
-                            path: appState.trimDraft.destinationDirectoryPath
-                        ) {
-                            appState.chooseDestinationFolder(for: .trim)
-                        }
-
-                        Text("Strategy: \(appState.trimDraft.currentPlan.strategy.rawValue)")
-                            .font(.headline)
-                        Text(appState.trimDraft.currentPlan.reason)
-                            .foregroundStyle(.secondary)
-
-                        Button("Add Trim Job") {
-                            appState.enqueueTrim()
-                        }
-                        .accessibilityIdentifier(AccessibilityID.trimQueueButton)
                     }
                 }
             }
@@ -192,4 +226,3 @@ private struct TrimTimelineView: View {
         .frame(height: 96)
     }
 }
-

@@ -12,6 +12,7 @@ final class AppState {
 
     var selectedSection: AppSection = .download
     var inspectorMode: InspectorMode?
+    var inspectorArtifactPath: String?
     var downloadDraft: DownloadDraft
     var convertDraft: ConvertDraft
     var transcribeDraft: TranscribeDraft
@@ -74,20 +75,35 @@ final class AppState {
         self.thumbnailService = ThumbnailService()
 
         let destinationPath = preferencesStore.defaultDownloadFolderPath
+        let defaultSubtitleFormat = preferencesStore.defaultSubtitleOutputFormat
+        let defaultDownloadSubtitleWorkflow = SubtitleWorkflowOptions(
+            sourcePolicy: preferencesStore.defaultDownloadSubtitlePolicy,
+            outputFormat: defaultSubtitleFormat
+        )
+        let defaultConvertSubtitleWorkflow = preferencesStore.defaultConvertAutoSubtitles
+            ? SubtitleWorkflowOptions.generateOnly(format: defaultSubtitleFormat)
+            : SubtitleWorkflowOptions.off(format: defaultSubtitleFormat)
+        let defaultTrimSubtitleWorkflow = preferencesStore.defaultTrimAutoSubtitles
+            ? SubtitleWorkflowOptions.generateOnly(format: defaultSubtitleFormat)
+            : SubtitleWorkflowOptions.off(format: defaultSubtitleFormat)
         self.downloadDraft = DownloadDraft(
             selectedPreset: preferencesStore.defaultDownloadPreset,
             destinationDirectoryPath: destinationPath,
+            subtitleWorkflow: defaultDownloadSubtitleWorkflow,
             filenameTemplate: preferencesStore.filenameTemplate
         )
         self.convertDraft = ConvertDraft(
             selectedPreset: preferencesStore.defaultConvertPreset,
-            destinationDirectoryPath: destinationPath
+            destinationDirectoryPath: destinationPath,
+            subtitleWorkflow: defaultConvertSubtitleWorkflow
         )
         self.transcribeDraft = TranscribeDraft(
-            destinationDirectoryPath: destinationPath
+            destinationDirectoryPath: destinationPath,
+            outputFormat: defaultSubtitleFormat
         )
         self.trimDraft = TrimDraft(
             destinationDirectoryPath: destinationPath,
+            subtitleWorkflow: defaultTrimSubtitleWorkflow,
             allowFastCopy: preferencesStore.allowFastTrimCopy
         )
     }
@@ -96,8 +112,8 @@ final class AppState {
         guard !didBootstrap else { return }
         didBootstrap = true
 
-        queueStore.onCompleted = { [historyStore] job in
-            historyStore.record(job: job)
+        queueStore.onCompleted = { [weak self] job in
+            self?.handleCompletedJob(job)
         }
 
         queueStore.setExecutor { [weak self] request, onEvent in
@@ -285,12 +301,14 @@ final class AppState {
             return
         }
 
+        guard validateSubtitleWorkflow(downloadDraft.subtitleWorkflow) else { return }
+
         let request = DownloadRequest(
             sourceURLString: trimmedURL,
             destinationDirectory: URL(fileURLWithPath: currentDestinationPath(for: .download), isDirectory: true),
             selectedFormatID: downloadDraft.selectedFormatID,
             preset: downloadDraft.selectedPreset,
-            includeSubtitles: downloadDraft.includeSubtitles,
+            subtitleWorkflow: downloadDraft.subtitleWorkflow,
             filenameTemplate: downloadDraft.filenameTemplate.isEmpty ? preferencesStore.filenameTemplate : downloadDraft.filenameTemplate,
             overwriteExisting: preferencesStore.overwriteExisting
         )
@@ -317,10 +335,13 @@ final class AppState {
             return
         }
 
+        guard validateSubtitleWorkflow(convertDraft.subtitleWorkflow) else { return }
+
         let request = ConvertRequest(
             inputURL: inputURL,
             destinationDirectory: URL(fileURLWithPath: currentDestinationPath(for: .convert), isDirectory: true),
             preset: convertDraft.selectedPreset,
+            subtitleWorkflow: convertDraft.subtitleWorkflow,
             containerOverride: convertDraft.containerOverride,
             videoCodecOverride: convertDraft.videoCodecOverride,
             audioCodecOverride: convertDraft.audioCodecOverride,
@@ -357,10 +378,13 @@ final class AppState {
             return
         }
 
+        guard validateSubtitleWorkflow(trimDraft.subtitleWorkflow) else { return }
+
         let request = TrimRequest(
             inputURL: inputURL,
             destinationDirectory: URL(fileURLWithPath: currentDestinationPath(for: .trim), isDirectory: true),
             preset: trimDraft.selectedPreset,
+            subtitleWorkflow: trimDraft.subtitleWorkflow,
             range: normalizedRange,
             allowFastCopy: trimDraft.allowFastCopy,
             overwriteExisting: preferencesStore.overwriteExisting
@@ -399,17 +423,7 @@ final class AppState {
             overwriteExisting: preferencesStore.overwriteExisting
         )
 
-        queueStore.enqueue(
-            JobRequest(
-                kind: .transcribe,
-                title: inputURL.lastPathComponent,
-                subtitle: request.outputFormat.title,
-                source: .local(inputURL),
-                preset: nil,
-                transcriptionOutputFormat: request.outputFormat,
-                payload: .transcribe(request)
-            )
-        )
+        queueStore.enqueue(makeTranscribeJobRequest(for: request, title: inputURL.lastPathComponent))
         selectedSection = .queue
         inspectorMode = .logs
     }
@@ -464,7 +478,9 @@ final class AppState {
             } else if entry.outputURL != nil {
                 selectedSection = .history
                 historyStore.selectedEntryID = entry.id
-                inspectorMode = .transcript
+                if let artifact = entry.primaryArtifact {
+                    previewArtifact(artifact)
+                }
             }
         }
     }
@@ -506,14 +522,7 @@ final class AppState {
     }
 
     func transcriptTitleForInspector() -> String {
-        switch selectedSection {
-        case .queue:
-            return queueStore.selectedJob?.outputURL?.lastPathComponent ?? "Transcript Preview"
-        case .history:
-            return selectedHistoryEntry?.outputURL?.lastPathComponent ?? "Transcript Preview"
-        case .download, .convert, .trim, .transcribe:
-            return "Transcript Preview"
-        }
+        currentTranscriptURLForInspector()?.lastPathComponent ?? "Transcript Preview"
     }
 
     func transcriptPreviewForInspector() -> String? {
@@ -592,6 +601,11 @@ final class AppState {
         FileHelpers.open(url)
     }
 
+    func previewArtifact(_ artifact: JobArtifact) {
+        inspectorArtifactPath = artifact.path
+        inspectorMode = .transcript
+    }
+
     func loadMediaIntoTranscribe(_ url: URL) {
         Task {
             await loadLocalFile(url, for: .transcribe)
@@ -606,6 +620,44 @@ final class AppState {
     func transcriptionSourceURL(for entry: HistoryEntry) -> URL? {
         guard entry.jobKind != .transcribe else { return nil }
         return entry.outputURL ?? entry.source.localURL
+    }
+
+    func makeAutoSubtitleJobRequest(for completedJob: JobRecord) -> JobRequest? {
+        guard completedJob.status == .completed, completedJob.request.parentJobID == nil else { return nil }
+        guard let inputURL = completedJob.outputURL else { return nil }
+
+        let outputFormat: TranscriptionOutputFormat
+        switch completedJob.request.payload {
+        case .download(let request):
+            guard request.subtitleWorkflow.generatesSubtitles else { return nil }
+            if request.subtitleWorkflow.requestsSourceSubtitles, !completedJob.subtitleArtifacts.isEmpty {
+                return nil
+            }
+            outputFormat = request.subtitleWorkflow.outputFormat
+        case .convert(let request):
+            guard request.subtitleWorkflow.generatesSubtitles else { return nil }
+            outputFormat = request.subtitleWorkflow.outputFormat
+        case .trim(let request):
+            guard request.subtitleWorkflow.generatesSubtitles else { return nil }
+            outputFormat = request.subtitleWorkflow.outputFormat
+        case .transcribe:
+            return nil
+        }
+
+        let request = TranscribeRequest(
+            inputURL: inputURL,
+            destinationDirectory: inputURL.deletingLastPathComponent(),
+            outputFormat: outputFormat,
+            overwriteExisting: preferencesStore.overwriteExisting
+        )
+
+        return makeTranscribeJobRequest(
+            for: request,
+            title: completedJob.request.title,
+            workflowID: completedJob.request.workflowID,
+            parentJobID: completedJob.id,
+            subtitle: "Auto subtitles (\(outputFormat.shortTitle))"
+        )
     }
 
     func updateTrimStart(from string: String) {
@@ -657,6 +709,7 @@ final class AppState {
             inputURL: inputURL,
             destinationDirectory: URL(fileURLWithPath: currentDestinationPath(for: .trim), isDirectory: true),
             preset: trimDraft.selectedPreset,
+            subtitleWorkflow: trimDraft.subtitleWorkflow,
             range: trimDraft.range,
             allowFastCopy: trimDraft.allowFastCopy,
             overwriteExisting: preferencesStore.overwriteExisting
@@ -666,6 +719,42 @@ final class AppState {
 
     var selectedHistoryEntry: HistoryEntry? {
         historyStore.selectedEntry
+    }
+
+    private func handleCompletedJob(_ job: JobRecord) {
+        historyStore.record(job: job)
+
+        guard isTranscriptionReady, let followUpRequest = makeAutoSubtitleJobRequest(for: job) else {
+            return
+        }
+
+        queueStore.enqueue(followUpRequest)
+    }
+
+    private func validateSubtitleWorkflow(_ workflow: SubtitleWorkflowOptions) -> Bool {
+        guard workflow.needsLocalRuntime, !isTranscriptionReady else { return true }
+        alert = AppAlert(title: "Transcription runtime incomplete", message: transcriptionRuntimeDetail)
+        return false
+    }
+
+    private func makeTranscribeJobRequest(
+        for request: TranscribeRequest,
+        title: String,
+        workflowID: UUID = UUID(),
+        parentJobID: UUID? = nil,
+        subtitle: String? = nil
+    ) -> JobRequest {
+        JobRequest(
+            workflowID: workflowID,
+            parentJobID: parentJobID,
+            kind: .transcribe,
+            title: title,
+            subtitle: subtitle ?? request.outputFormat.title,
+            source: .local(request.inputURL),
+            preset: nil,
+            transcriptionOutputFormat: request.outputFormat,
+            payload: .transcribe(request)
+        )
     }
 
     private func hasBundledTool(_ tool: BundledTool) -> Bool {
@@ -685,6 +774,10 @@ final class AppState {
     }
 
     private func currentTranscriptURLForInspector() -> URL? {
+        if let inspectorArtifactPath {
+            return URL(fileURLWithPath: inspectorArtifactPath)
+        }
+
         switch selectedSection {
         case .queue:
             guard queueStore.selectedJob?.request.kind == .transcribe else { return nil }
@@ -759,7 +852,10 @@ final class AppState {
     }
 
     private func seedUITestDataIfNeeded() {
-        guard ProcessInfo.processInfo.arguments.contains("-uitest-seed-transcribe") else { return }
+        let arguments = ProcessInfo.processInfo.arguments
+        let shouldSeedQueueHistory = arguments.contains("-uitest-seed-transcribe")
+        let shouldSeedWorkspaces = arguments.contains("-uitest-seed-subtitle-workspaces")
+        guard shouldSeedQueueHistory || shouldSeedWorkspaces else { return }
 
         let fixtureRoot = FileManager.default.temporaryDirectory
             .appendingPathComponent("MediaGetterUITests", isDirectory: true)
@@ -767,17 +863,95 @@ final class AppState {
         try? FileManager.default.createDirectory(at: fixtureRoot, withIntermediateDirectories: true)
 
         let mediaURL = fixtureRoot.appendingPathComponent("sample-output.mp4")
+        let sourceSubtitleURL = fixtureRoot.appendingPathComponent("sample-output.en.vtt")
         let transcriptURL = fixtureRoot.appendingPathComponent("sample-output-transcript.txt")
 
         if !FileManager.default.fileExists(atPath: mediaURL.path) {
             try? Data("stub media".utf8).write(to: mediaURL, options: .atomic)
         }
 
+        if !FileManager.default.fileExists(atPath: sourceSubtitleURL.path) {
+            try? Data("WEBVTT\n\n00:00.000 --> 00:01.000\nHello from source subtitles.".utf8).write(
+                to: sourceSubtitleURL,
+                options: .atomic
+            )
+        }
+
         if !FileManager.default.fileExists(atPath: transcriptURL.path) {
             try? Data("Hello from the bundled transcript preview.".utf8).write(to: transcriptURL, options: .atomic)
         }
 
+        let localMetadata = MediaMetadata(
+            source: .local(mediaURL),
+            title: mediaURL.lastPathComponent,
+            duration: 42,
+            container: "mp4",
+            videoCodec: "h264",
+            audioCodec: "aac",
+            width: 1920,
+            height: 1080,
+            fileSize: 1_024_000
+        )
+        let downloadMetadata = MediaMetadata(
+            source: .remote("https://example.com/video"),
+            title: "Seeded Sample",
+            duration: 42,
+            extractor: "generic",
+            container: "mp4",
+            videoCodec: "h264",
+            audioCodec: "aac",
+            width: 1920,
+            height: 1080,
+            fileSize: 1_024_000,
+            formats: [
+                DownloadFormatOption(
+                    id: "137+140",
+                    ext: "mp4",
+                    displayName: "1080p • MP4",
+                    resolution: "1920x1080",
+                    note: nil,
+                    sizeBytes: 1_024_000,
+                    fps: 30,
+                    hasVideo: true,
+                    hasAudio: true
+                )
+            ]
+        )
+
+        if shouldSeedWorkspaces {
+            downloadDraft.urlString = "https://example.com/video"
+            downloadDraft.metadata = downloadMetadata
+            downloadDraft.selectedFormatID = "137+140"
+            downloadDraft.destinationDirectoryPath = fixtureRoot.path
+
+            convertDraft.inputURL = mediaURL
+            convertDraft.metadata = localMetadata
+            convertDraft.destinationDirectoryPath = fixtureRoot.path
+
+            trimDraft.inputURL = mediaURL
+            trimDraft.metadata = localMetadata
+            trimDraft.destinationDirectoryPath = fixtureRoot.path
+            trimDraft.range = TrimRange(start: 0, end: 12)
+            trimDraft.currentPlan = trimService.makePlan(
+                request: TrimRequest(
+                    inputURL: mediaURL,
+                    destinationDirectory: fixtureRoot,
+                    preset: trimDraft.selectedPreset,
+                    subtitleWorkflow: trimDraft.subtitleWorkflow,
+                    range: trimDraft.range,
+                    allowFastCopy: trimDraft.allowFastCopy,
+                    overwriteExisting: preferencesStore.overwriteExisting
+                ),
+                metadata: localMetadata
+            )
+        }
+
+        guard shouldSeedQueueHistory else { return }
+
+        let workflowID = UUID()
+
         let mediaRequest = JobRequest(
+            workflowID: workflowID,
             kind: .download,
             title: "Seeded Sample",
             subtitle: OutputPresetID.mp4Video.title,
@@ -790,7 +964,10 @@ final class AppState {
                     destinationDirectory: fixtureRoot,
                     selectedFormatID: "best",
                     preset: .mp4Video,
-                    includeSubtitles: false,
+                    subtitleWorkflow: SubtitleWorkflowOptions(
+                        sourcePolicy: .preferSourceThenGenerate,
+                        outputFormat: .srt
+                    ),
                     filenameTemplate: "%(title)s",
                     overwriteExisting: true
                 )
@@ -798,9 +975,11 @@ final class AppState {
         )
 
         let transcriptRequest = JobRequest(
+            workflowID: workflowID,
+            parentJobID: mediaRequest.id,
             kind: .transcribe,
             title: "Seeded Sample",
-            subtitle: TranscriptionOutputFormat.txt.title,
+            subtitle: "Auto subtitles (\(TranscriptionOutputFormat.txt.shortTitle))",
             source: .local(mediaURL),
             preset: nil,
             transcriptionOutputFormat: .txt,
@@ -822,7 +1001,10 @@ final class AppState {
             progress: 1,
             phase: mediaURL.lastPathComponent,
             logs: ["Download finished"],
-            outputURL: mediaURL,
+            artifacts: [
+                JobArtifact(kind: .media, url: mediaURL, isPrimary: true),
+                JobArtifact(kind: .subtitle, url: sourceSubtitleURL, isPrimary: false)
+            ],
             createdAt: now,
             startedAt: now,
             completedAt: now,
@@ -835,7 +1017,7 @@ final class AppState {
             progress: 1,
             phase: transcriptURL.lastPathComponent,
             logs: ["Transcription finished"],
-            outputURL: transcriptURL,
+            artifacts: [JobArtifact(kind: .transcript, url: transcriptURL, isPrimary: true)],
             createdAt: now,
             startedAt: now,
             completedAt: now,
@@ -852,7 +1034,9 @@ final class AppState {
                 title: transcriptJob.request.title,
                 subtitle: transcriptJob.request.subtitle,
                 source: transcriptJob.request.source,
-                outputPath: transcriptURL.path,
+                workflowID: workflowID,
+                parentJobID: mediaJob.id,
+                artifacts: transcriptJob.artifacts,
                 createdAt: now,
                 preset: nil,
                 transcriptionOutputFormat: .txt,
@@ -864,7 +1048,8 @@ final class AppState {
                 title: mediaJob.request.title,
                 subtitle: mediaJob.request.subtitle,
                 source: mediaJob.request.source,
-                outputPath: mediaURL.path,
+                workflowID: workflowID,
+                artifacts: mediaJob.artifacts,
                 createdAt: now,
                 preset: .mp4Video,
                 transcriptionOutputFormat: nil,
@@ -877,7 +1062,11 @@ final class AppState {
     private func applyUITestLaunchSelectionIfNeeded() {
         let arguments = ProcessInfo.processInfo.arguments
 
-        if arguments.contains("-uitest-open-transcribe") {
+        if arguments.contains("-uitest-open-convert") {
+            selectedSection = .convert
+        } else if arguments.contains("-uitest-open-trim") {
+            selectedSection = .trim
+        } else if arguments.contains("-uitest-open-transcribe") {
             selectedSection = .transcribe
         } else if arguments.contains("-uitest-open-queue") {
             selectedSection = .queue

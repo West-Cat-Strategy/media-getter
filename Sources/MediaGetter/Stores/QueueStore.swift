@@ -29,7 +29,7 @@ final class QueueStore {
             progress: 0,
             phase: "Waiting for queue",
             logs: [],
-            outputURL: nil,
+            artifacts: [],
             createdAt: Date(),
             startedAt: nil,
             completedAt: nil,
@@ -120,7 +120,11 @@ final class QueueStore {
         case .log(let log):
             jobs[index].logs.append(log)
         case .destination(let url):
-            jobs[index].outputURL = url
+            if let existingPrimaryIndex = jobs[index].artifacts.firstIndex(where: \.isPrimary) {
+                jobs[index].artifacts[existingPrimaryIndex] = JobArtifact(kind: .media, url: url, isPrimary: true)
+            } else {
+                jobs[index].artifacts.append(JobArtifact(kind: .media, url: url, isPrimary: true))
+            }
         }
     }
 
@@ -129,7 +133,7 @@ final class QueueStore {
         jobs[index].status = .completed
         jobs[index].progress = 1
         jobs[index].phase = result.summary
-        jobs[index].outputURL = result.outputURL
+        jobs[index].artifacts = result.artifacts
         jobs[index].completedAt = Date()
         onCompleted?(jobs[index])
     }

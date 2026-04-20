@@ -4,6 +4,7 @@ import SwiftUI
 struct MediaGetterApp: App {
     @NSApplicationDelegateAdaptor(AppDelegate.self) private var appDelegate
     @State private var appState = AppState()
+    @State private var appUpdateManager = AppUpdateManager()
 
     var body: some Scene {
         WindowGroup {
@@ -14,14 +15,13 @@ struct MediaGetterApp: App {
                 }
         }
         .commands {
-            MediaGetterCommands(appState: appState)
+            MediaGetterCommands(appState: appState, appUpdateManager: appUpdateManager)
         }
 
         Settings {
-            SettingsView(appState: appState)
+            SettingsView(appState: appState, appUpdateManager: appUpdateManager)
                 .frame(width: 560, height: 520)
                 .padding()
         }
     }
 }
-

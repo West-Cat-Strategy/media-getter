@@ -2,9 +2,30 @@ import SwiftUI
 
 struct SettingsView: View {
     @Bindable var appState: AppState
+    @Bindable var appUpdateManager: AppUpdateManager
 
     var body: some View {
         Form {
+            Section("Updates") {
+                VStack(alignment: .leading, spacing: 4) {
+                    Text(appUpdateManager.versionDescription)
+                        .font(.headline)
+                    Text("Updates are delivered from the latest GitHub release feed.")
+                        .foregroundStyle(.secondary)
+                }
+                .padding(.vertical, 4)
+
+                Toggle("Automatically check for updates", isOn: $appUpdateManager.automaticallyChecksForUpdates)
+
+                Toggle("Download updates in the background", isOn: $appUpdateManager.automaticallyDownloadsUpdates)
+                    .disabled(!appUpdateManager.automaticallyChecksForUpdates || !appUpdateManager.allowsAutomaticUpdates)
+
+                Button("Check for Updates...") {
+                    appUpdateManager.checkForUpdates()
+                }
+                .disabled(!appUpdateManager.canCheckForUpdates)
+            }
+
             Section("Defaults") {
                 HStack(alignment: .firstTextBaseline) {
                     VStack(alignment: .leading, spacing: 4) {
@@ -45,6 +66,23 @@ struct SettingsView: View {
                 }
 
                 Toggle("Prefer fast trim copy when safe", isOn: $appState.preferencesStore.allowFastTrimCopy)
+            }
+
+            Section("Subtitle Defaults") {
+                Picker("Download subtitle strategy", selection: $appState.preferencesStore.defaultDownloadSubtitlePolicy) {
+                    ForEach(SubtitleSourcePolicy.allCases) { policy in
+                        Text(policy.title).tag(policy)
+                    }
+                }
+
+                Toggle("Generate subtitles after convert exports", isOn: $appState.preferencesStore.defaultConvertAutoSubtitles)
+                Toggle("Generate subtitles after trim exports", isOn: $appState.preferencesStore.defaultTrimAutoSubtitles)
+
+                Picker("Generated subtitle output", selection: $appState.preferencesStore.defaultSubtitleOutputFormat) {
+                    ForEach(TranscriptionOutputFormat.allCases) { format in
+                        Text(format.title).tag(format)
+                    }
+                }
             }
 
             Section("Bundled Toolchain") {

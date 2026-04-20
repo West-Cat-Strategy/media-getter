@@ -118,12 +118,28 @@ final class DownloadProbeService: @unchecked Sendable {
 }
 
 final class DownloadService: @unchecked Sendable {
+    struct DirectorySnapshotEntry: Equatable {
+        var path: String
+        var sizeBytes: Int64?
+        var modificationDate: Date?
+
+        var url: URL {
+            URL(fileURLWithPath: path)
+        }
+    }
+
     private let toolchainManager: ToolchainManager
     private let processRunner: ProcessRunner
+    private let fileManager: FileManager
 
-    init(toolchainManager: ToolchainManager, processRunner: ProcessRunner) {
+    init(
+        toolchainManager: ToolchainManager,
+        processRunner: ProcessRunner,
+        fileManager: FileManager = .default
+    ) {
         self.toolchainManager = toolchainManager
         self.processRunner = processRunner
+        self.fileManager = fileManager
     }
 
     func buildCommand(
@@ -169,8 +185,8 @@ final class DownloadService: @unchecked Sendable {
             break
         }
 
-        if request.includeSubtitles {
-            arguments.append(contentsOf: ["--write-subs", "--embed-subs", "--sub-langs", "all"])
+        if request.subtitleWorkflow.requestsSourceSubtitles {
+            arguments.append(contentsOf: ["--write-subs", "--sub-langs", "all"])
         }
 
         arguments.append(request.sourceURLString)
@@ -195,6 +211,8 @@ final class DownloadService: @unchecked Sendable {
             denoURL: denoURL,
             toolsDirectoryURL: toolsDirectoryURL
         )
+        try? fileManager.createDirectory(at: request.destinationDirectory, withIntermediateDirectories: true)
+        let beforeSnapshot = snapshotDirectory(request.destinationDirectory)
 
         let result = try await processRunner.run(command) { line in
             Task {
@@ -217,6 +235,8 @@ final class DownloadService: @unchecked Sendable {
             }
         }
 
+        let afterSnapshot = snapshotDirectory(request.destinationDirectory)
+
         let discoveredOutputURL = result.combinedOutput
             .split(whereSeparator: \.isNewline)
             .map(String.init)
@@ -235,15 +255,100 @@ final class DownloadService: @unchecked Sendable {
             await onEvent(.destination(discoveredOutputURL))
         }
 
-        return JobResult(
-            outputURL: discoveredOutputURL,
-            summary: discoveredOutputURL?.lastPathComponent ?? "Download finished"
+        let artifacts = detectArtifacts(
+            before: beforeSnapshot,
+            after: afterSnapshot,
+            primaryOutputURL: discoveredOutputURL
         )
+
+        return JobResult(artifacts: artifacts, summary: discoveredOutputURL?.lastPathComponent ?? "Download finished")
+    }
+
+    func snapshotDirectory(_ directoryURL: URL) -> [DirectorySnapshotEntry] {
+        let keys: Set<URLResourceKey> = [.fileSizeKey, .contentModificationDateKey, .isRegularFileKey]
+        guard let fileURLs = try? fileManager.contentsOfDirectory(
+            at: directoryURL,
+            includingPropertiesForKeys: Array(keys),
+            options: [.skipsHiddenFiles]
+        ) else {
+            return []
+        }
+
+        return fileURLs.compactMap { fileURL in
+            guard let values = try? fileURL.resourceValues(forKeys: keys), values.isRegularFile == true else {
+                return nil
+            }
+
+            return DirectorySnapshotEntry(
+                path: fileURL.path,
+                sizeBytes: values.fileSize.map(Int64.init),
+                modificationDate: values.contentModificationDate
+            )
+        }
+        .sorted { $0.path < $1.path }
+    }
+
+    func detectArtifacts(
+        before: [DirectorySnapshotEntry],
+        after: [DirectorySnapshotEntry],
+        primaryOutputURL: URL?
+    ) -> [JobArtifact] {
+        let beforeByPath = Dictionary(uniqueKeysWithValues: before.map { ($0.path, $0) })
+        let changedURLs = after.compactMap { entry -> URL? in
+            guard beforeByPath[entry.path] != entry else { return nil }
+            return entry.url
+        }
+
+        let resolvedPrimaryURL = primaryOutputURL ?? changedURLs.first(where: { !Self.isSubtitleURL($0) })
+        var artifacts: [JobArtifact] = []
+        if let resolvedPrimaryURL {
+            artifacts.append(JobArtifact(kind: .media, url: resolvedPrimaryURL, isPrimary: true))
+        }
+
+        guard let resolvedPrimaryURL else { return artifacts }
+        let subtitleURLs = changedURLs
+            .filter { $0.path != resolvedPrimaryURL.path }
+            .filter(Self.isSubtitleURL(_:))
+            .filter { Self.matchesSubtitleSidecar($0, for: resolvedPrimaryURL) }
+            .sorted { $0.lastPathComponent < $1.lastPathComponent }
+
+        artifacts.append(
+            contentsOf: subtitleURLs.map { JobArtifact(kind: .subtitle, url: $0, isPrimary: false) }
+        )
+        return artifacts
     }
 
     private static func runtimeEnvironment(toolsDirectoryURL: URL) -> [String: String] {
         ["PATH": "\(toolsDirectoryURL.path):/usr/bin:/bin:/usr/sbin:/sbin"]
     }
+
+    private static func isSubtitleURL(_ url: URL) -> Bool {
+        subtitleExtensions.contains(url.pathExtension.lowercased())
+    }
+
+    private static func matchesSubtitleSidecar(_ subtitleURL: URL, for primaryOutputURL: URL) -> Bool {
+        let primaryStem = Formatters.filenameStem(for: primaryOutputURL)
+        let subtitleStem = Formatters.filenameStem(for: subtitleURL)
+        let separators = [".", "-", "_"]
+
+        if subtitleStem == primaryStem {
+            return true
+        }
+
+        return separators.contains { separator in
+            subtitleStem.hasPrefix(primaryStem + separator)
+        }
+    }
+
+    private static let subtitleExtensions: Set<String> = [
+        "srt",
+        "vtt",
+        "ass",
+        "ssa",
+        "sub",
+        "lrc",
+        "ttml"
+    ]
 }
 
 final class TranscodeService: @unchecked Sendable {
@@ -630,7 +735,11 @@ final class TranscriptionService: @unchecked Sendable {
             await onEvent(.phase("Writing transcript"))
             await onEvent(.progress(1))
             await onEvent(.destination(transcriptURL))
-            return JobResult(outputURL: transcriptURL, summary: transcriptURL.lastPathComponent)
+            return JobResult(
+                outputURL: transcriptURL,
+                summary: transcriptURL.lastPathComponent,
+                artifactKind: request.outputFormat.artifactKind
+            )
         } catch {
             if shouldRemoveOutputOnFailure, fileManager.fileExists(atPath: outputURL.path) {
                 try? fileManager.removeItem(at: outputURL)
