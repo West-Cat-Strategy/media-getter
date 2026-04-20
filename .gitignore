@@ -6,4 +6,4 @@ DerivedData
 *.xcuserstate
 xcuserdata/
 *.swp
-
+Vendor/Models/ggml-base.en.bin
