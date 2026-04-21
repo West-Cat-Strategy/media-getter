@@ -8,6 +8,9 @@ on:
 permissions:
   contents: write
 
+env:
+  XCODEGEN_VERSION: 2.45.4
+
 jobs:
   build-and-publish:
     runs-on: macos-15
@@ -28,11 +31,23 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Install XcodeGen
+      - name: Install Pinned XcodeGen
         run: |
-          if ! command -v xcodegen >/dev/null 2>&1; then
-            brew install xcodegen
+          if command -v xcodegen >/dev/null 2>&1 && [[ "$(xcodegen --version | awk '/Version:/ { print $2 }')" == "$XCODEGEN_VERSION" ]]; then
+            exit 0
           fi
+
+          XCODEGEN_DIR="$RUNNER_TEMP/xcodegen"
+          rm -rf "$XCODEGEN_DIR"
+          mkdir -p "$XCODEGEN_DIR"
+          gh release download "$XCODEGEN_VERSION" \
+            --repo yonaskolb/XcodeGen \
+            --pattern "xcodegen.zip" \
+            --dir "$XCODEGEN_DIR"
+          unzip -q "$XCODEGEN_DIR/xcodegen.zip" -d "$XCODEGEN_DIR"
+          echo "$XCODEGEN_DIR/xcodegen/bin" >> "$GITHUB_PATH"
+          export PATH="$XCODEGEN_DIR/xcodegen/bin:$PATH"
+          [[ "$(xcodegen --version | awk '/Version:/ { print $2 }')" == "$XCODEGEN_VERSION" ]]
 
       - name: Prepare Signing Keychain
         env:
@@ -66,7 +81,10 @@ jobs:
         run: |
           SPARKLE_DOWNLOAD_DIR="$RUNNER_TEMP/sparkle"
           mkdir -p "$SPARKLE_DOWNLOAD_DIR"
-          gh release download --repo sparkle-project/Sparkle --pattern "Sparkle-${SPARKLE_VERSION}.tar.xz" --dir "$SPARKLE_DOWNLOAD_DIR"
+          gh release download "$SPARKLE_VERSION" \
+            --repo sparkle-project/Sparkle \
+            --pattern "Sparkle-${SPARKLE_VERSION}.tar.xz" \
+            --dir "$SPARKLE_DOWNLOAD_DIR"
           tar -xf "$SPARKLE_DOWNLOAD_DIR"/"Sparkle-${SPARKLE_VERSION}.tar.xz" -C "$SPARKLE_DOWNLOAD_DIR"
           SPARKLE_BIN_DIR="$(find "$SPARKLE_DOWNLOAD_DIR" -type d -path '*/bin' -print -quit)"
           echo "SPARKLE_BIN_DIR=$SPARKLE_BIN_DIR" >> "$GITHUB_ENV"
@@ -79,20 +97,37 @@ jobs:
           printf '%s' "$SPARKLE_PRIVATE_ED_KEY_FILE_BASE64" | base64 --decode > "$SPARKLE_PRIVATE_KEY_FILE"
           ./script/import_sparkle_private_key.sh "$SPARKLE_BIN_DIR" "$SPARKLE_PRIVATE_KEY_FILE"
 
-      - name: Create Release Notes
+      - name: Create Draft Release Notes
         run: |
           TAG_NAME="${GITHUB_REF_NAME}"
+          RELEASE_VERSION="${TAG_NAME#v}"
 
           if ! gh release view "$TAG_NAME" >/dev/null 2>&1; then
-            gh release create "$TAG_NAME" --title "$TAG_NAME" --generate-notes
+            gh release create "$TAG_NAME" --title "$TAG_NAME" --generate-notes --draft
+          else
+            gh release edit "$TAG_NAME" --draft=true --title "$TAG_NAME"
           fi
 
           mkdir -p "$BUILD_ROOT"
           gh release view "$TAG_NAME" --json body --jq .body > "$BUILD_ROOT/release-notes.md"
-          echo "RELEASE_PUBLISHED_AT=$(gh release view "$TAG_NAME" --json publishedAt --jq .publishedAt)" >> "$GITHUB_ENV"
+          echo "RELEASE_PUBLISHED_AT=$(date -u '+%Y-%m-%dT%H:%M:%SZ')" >> "$GITHUB_ENV"
           echo "RELEASE_URL=https://github.com/${GITHUB_REPOSITORY}/releases/tag/${TAG_NAME}" >> "$GITHUB_ENV"
+          echo "RELEASE_VERSION=$RELEASE_VERSION" >> "$GITHUB_ENV"
+
+      - name: Generate Project And Resolve Packages
+        run: |
+          xcodegen generate --spec project.yml
+          xcodebuild -resolvePackageDependencies -project MediaGetter.xcodeproj -scheme MediaGetter
+
+      - name: Verify Generated Project Files
+        run: |
+          git diff --exit-code -- \
+            MediaGetter.xcodeproj \
+            MediaGetter.xcodeproj/project.xcworkspace/xcshareddata/swiftpm/Package.resolved
 
       - name: Export Signed Release Bundle
+        env:
+          RELEASE_VERSION: ${{ env.RELEASE_VERSION }}
         run: ./script/export_release_bundle.sh
 
       - name: Notarize Release Bundle
@@ -104,9 +139,20 @@ jobs:
           RELEASE_NOTES_FILE: build/release/release-notes.md
         run: ./script/generate_sparkle_appcast.sh
 
+      - name: Run Appcast Smoke Test
+        run: |
+          if [[ -x script/tests/test_generate_sparkle_appcast.sh ]]; then
+            script/tests/test_generate_sparkle_appcast.sh
+          else
+            echo "No appcast smoke test present yet."
+          fi
+
       - name: Upload Release Assets
         run: |
           gh release upload "${GITHUB_REF_NAME}" \
             "$BUILD_ROOT/dist/MediaGetter.zip" \
             "$BUILD_ROOT/dist/appcast.xml" \
             --clobber
+
+      - name: Publish Release
+        run: gh release edit "${GITHUB_REF_NAME}" --draft=false --latest

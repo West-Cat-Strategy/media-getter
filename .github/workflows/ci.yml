@@ -11,6 +11,10 @@ on:
 permissions:
   contents: read
 
+env:
+  GH_TOKEN: ${{ github.token }}
+  XCODEGEN_VERSION: 2.45.4
+
 jobs:
   build-and-test:
     runs-on: macos-15
@@ -19,11 +23,23 @@ jobs:
       - name: Check Out Repository
         uses: actions/checkout@v4
 
-      - name: Install XcodeGen
+      - name: Install Pinned XcodeGen
         run: |
-          if ! command -v xcodegen >/dev/null 2>&1; then
-            brew install xcodegen
+          if command -v xcodegen >/dev/null 2>&1 && [[ "$(xcodegen --version | awk '/Version:/ { print $2 }')" == "$XCODEGEN_VERSION" ]]; then
+            exit 0
           fi
+
+          XCODEGEN_DIR="$RUNNER_TEMP/xcodegen"
+          rm -rf "$XCODEGEN_DIR"
+          mkdir -p "$XCODEGEN_DIR"
+          gh release download "$XCODEGEN_VERSION" \
+            --repo yonaskolb/XcodeGen \
+            --pattern "xcodegen.zip" \
+            --dir "$XCODEGEN_DIR"
+          unzip -q "$XCODEGEN_DIR/xcodegen.zip" -d "$XCODEGEN_DIR"
+          echo "$XCODEGEN_DIR/xcodegen/bin" >> "$GITHUB_PATH"
+          export PATH="$XCODEGEN_DIR/xcodegen/bin:$PATH"
+          [[ "$(xcodegen --version | awk '/Version:/ { print $2 }')" == "$XCODEGEN_VERSION" ]]
 
       - name: Generate Project And Resolve Packages
         run: |
@@ -31,7 +47,10 @@ jobs:
           xcodebuild -resolvePackageDependencies -project MediaGetter.xcodeproj -scheme MediaGetter
 
       - name: Verify Generated Project Files
-        run: git diff --exit-code -- MediaGetter.xcodeproj
+        run: |
+          git diff --exit-code -- \
+            MediaGetter.xcodeproj \
+            MediaGetter.xcodeproj/project.xcworkspace/xcshareddata/swiftpm/Package.resolved
 
       - name: Run Unit Tests
         run: |
@@ -44,3 +63,11 @@ jobs:
             -only-testing:MediaGetterTests \
             -onlyUsePackageVersionsFromResolvedFile \
             CODE_SIGNING_ALLOWED=NO
+
+      - name: Run Appcast Smoke Test
+        run: |
+          if [[ -x script/tests/test_generate_sparkle_appcast.sh ]]; then
+            script/tests/test_generate_sparkle_appcast.sh
+          else
+            echo "No appcast smoke test present yet."
+          fi

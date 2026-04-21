@@ -14,13 +14,18 @@ MediaGetter uses Sparkle 2 with GitHub Releases as the update backend.
 - CI runs on pushes and pull requests to `main`.
 - Tagged releases run on `v*` tags.
 - The release workflow:
-  1. Imports the Developer ID certificate into a temporary keychain.
-  2. Imports the Sparkle EdDSA private key into the runner keychain.
-  3. Builds and exports a signed `.app`.
-  4. Notarizes and staples the exported app.
-  5. Packages `MediaGetter.zip`.
-  6. Generates and signs `appcast.xml`.
-  7. Uploads both artifacts to the GitHub release.
+  1. Creates or updates a draft GitHub release for the pushed tag.
+  2. Imports the Developer ID certificate into a temporary keychain.
+  3. Imports the Sparkle EdDSA private key into the runner keychain.
+  4. Builds and exports a signed `.app`.
+  5. Notarizes and staples the exported app.
+  6. Packages `MediaGetter.zip`.
+  7. Generates and signs `appcast.xml`.
+  8. Uploads both artifacts to the draft release.
+  9. Publishes the release only after the assets are present.
+
+- Release builds derive both `MARKETING_VERSION` and `CURRENT_PROJECT_VERSION` from the pushed tag with the leading `v` stripped.
+- XcodeGen is pinned to `2.45.4` in CI and release automation.
 
 ## Required GitHub secrets
 

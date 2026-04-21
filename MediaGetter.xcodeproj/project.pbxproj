@@ -531,6 +531,7 @@
 					"@executable_path/../Frameworks",
 				);
 				MACOSX_DEPLOYMENT_TARGET = 14.0;
+				MGUpdaterEnabled = YES;
 				PRODUCT_BUNDLE_IDENTIFIER = com.bryan.mediagetter;
 				PRODUCT_NAME = MediaGetter;
 				SDKROOT = macosx;
@@ -655,6 +656,7 @@
 					"@executable_path/../Frameworks",
 				);
 				MACOSX_DEPLOYMENT_TARGET = 14.0;
+				MGUpdaterEnabled = NO;
 				PRODUCT_BUNDLE_IDENTIFIER = com.bryan.mediagetter;
 				PRODUCT_NAME = MediaGetter;
 				SDKROOT = macosx;

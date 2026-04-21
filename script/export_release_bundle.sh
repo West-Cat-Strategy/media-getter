@@ -14,6 +14,7 @@ EXPORTED_APP_PATH_FILE="${EXPORTED_APP_PATH_FILE:-$BUILD_ROOT/exported-app-path.
 XCODEGEN_BIN="${XCODEGEN_BIN:-$(command -v xcodegen || true)}"
 APPLE_TEAM_ID="${APPLE_TEAM_ID:-}"
 APPLE_DEVELOPER_ID_APPLICATION_IDENTITY="${APPLE_DEVELOPER_ID_APPLICATION_IDENTITY:-Developer ID Application}"
+RELEASE_VERSION="${RELEASE_VERSION:-}"
 
 if [[ -z "$XCODEGEN_BIN" ]]; then
   echo "error: xcodegen is required to generate $PROJECT_PATH before archiving." >&2
@@ -67,6 +68,13 @@ archive_args=(
 
 if [[ -n "$APPLE_TEAM_ID" ]]; then
   archive_args+=("DEVELOPMENT_TEAM=$APPLE_TEAM_ID")
+fi
+
+if [[ -n "$RELEASE_VERSION" ]]; then
+  archive_args+=(
+    "MARKETING_VERSION=$RELEASE_VERSION"
+    "CURRENT_PROJECT_VERSION=$RELEASE_VERSION"
+  )
 fi
 
 "${archive_args[@]}"

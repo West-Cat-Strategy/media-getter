@@ -38,8 +38,10 @@ targets:
       configs:
         Debug:
           ENABLE_HARDENED_RUNTIME: NO
+          MGUpdaterEnabled: NO
         Release:
           ENABLE_HARDENED_RUNTIME: YES
+          MGUpdaterEnabled: YES
     preBuildScripts:
       - name: Bundle CLI Tools
         outputFiles:

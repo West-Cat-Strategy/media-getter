@@ -3,6 +3,105 @@ import XCTest
 @testable import MediaGetter
 
 final class MediaGetterTests: XCTestCase {
+    @MainActor
+    func testAppUpdateManagerDisabledModeIsNoOp() {
+        let updater = FakeAppUpdater(
+            canCheckForUpdates: true,
+            automaticallyChecksForUpdates: true,
+            automaticallyDownloadsUpdates: true,
+            allowsAutomaticUpdates: true
+        )
+        let manager = AppUpdateManager(
+            updater: updater,
+            updaterEnabledOverride: false
+        )
+
+        XCTAssertFalse(manager.isUpdaterEnabled)
+        XCTAssertFalse(manager.canCheckForUpdates)
+        XCTAssertFalse(manager.automaticallyChecksForUpdates)
+        XCTAssertFalse(manager.automaticallyDownloadsUpdates)
+        XCTAssertFalse(manager.canConfigureAutomaticUpdateChecks)
+        XCTAssertFalse(manager.canConfigureAutomaticDownloads)
+        XCTAssertEqual(manager.updatesUnavailableMessage, "Updates are only available in release builds.")
+
+        manager.checkForUpdates()
+        manager.automaticallyChecksForUpdates = true
+        manager.automaticallyDownloadsUpdates = true
+
+        XCTAssertEqual(updater.checkForUpdatesCallCount, 0)
+        XCTAssertFalse(manager.automaticallyChecksForUpdates)
+        XCTAssertFalse(manager.automaticallyDownloadsUpdates)
+    }
+
+    @MainActor
+    func testAppUpdateManagerSyncsStateFromInjectedUpdater() {
+        let updater = FakeAppUpdater(
+            canCheckForUpdates: false,
+            automaticallyChecksForUpdates: false,
+            automaticallyDownloadsUpdates: false,
+            allowsAutomaticUpdates: false
+        )
+        let manager = AppUpdateManager(
+            updater: updater,
+            updaterEnabledOverride: true
+        )
+
+        updater.publishState(
+            canCheckForUpdates: true,
+            automaticallyChecksForUpdates: true,
+            automaticallyDownloadsUpdates: false,
+            allowsAutomaticUpdates: true
+        )
+
+        XCTAssertTrue(manager.isUpdaterEnabled)
+        XCTAssertTrue(manager.canCheckForUpdates)
+        XCTAssertTrue(manager.automaticallyChecksForUpdates)
+        XCTAssertFalse(manager.automaticallyDownloadsUpdates)
+        XCTAssertTrue(manager.canConfigureAutomaticUpdateChecks)
+        XCTAssertTrue(manager.canConfigureAutomaticDownloads)
+        XCTAssertNil(manager.updatesUnavailableMessage)
+    }
+
+    @MainActor
+    func testAppUpdateManagerPropagatesAutomaticCheckChanges() {
+        let updater = FakeAppUpdater(
+            canCheckForUpdates: true,
+            automaticallyChecksForUpdates: false,
+            automaticallyDownloadsUpdates: false,
+            allowsAutomaticUpdates: true
+        )
+        let manager = AppUpdateManager(
+            updater: updater,
+            updaterEnabledOverride: true
+        )
+
+        manager.automaticallyChecksForUpdates = true
+
+        XCTAssertTrue(updater.automaticallyChecksForUpdates)
+        XCTAssertTrue(manager.automaticallyChecksForUpdates)
+    }
+
+    @MainActor
+    func testAppUpdateManagerPropagatesAutomaticDownloadChanges() {
+        let updater = FakeAppUpdater(
+            canCheckForUpdates: true,
+            automaticallyChecksForUpdates: true,
+            automaticallyDownloadsUpdates: false,
+            allowsAutomaticUpdates: true
+        )
+        let manager = AppUpdateManager(
+            updater: updater,
+            updaterEnabledOverride: true
+        )
+
+        manager.automaticallyDownloadsUpdates = true
+        manager.checkForUpdates()
+
+        XCTAssertTrue(updater.automaticallyDownloadsUpdates)
+        XCTAssertTrue(manager.automaticallyDownloadsUpdates)
+        XCTAssertEqual(updater.checkForUpdatesCallCount, 1)
+    }
+
     func testParseVersions() {
         XCTAssertEqual(ToolchainManager.parseVersion(tool: .ytDlp, output: "2026.04.01\n"), "2026.04.01")
         XCTAssertEqual(ToolchainManager.parseVersion(tool: .ffmpeg, output: "ffmpeg version 7.2.0 Copyright\n"), "7.2.0 Copyright")
@@ -617,5 +716,59 @@ private func XCTAssertThrowsErrorAsync<T>(
         XCTFail("Expected expression to throw an error.", file: file, line: line)
     } catch {
         errorHandler?(error)
+    }
+}
+
+@MainActor
+private final class FakeAppUpdater: AppUpdaterControlling {
+    var canCheckForUpdates: Bool
+    var automaticallyChecksForUpdates: Bool
+    var automaticallyDownloadsUpdates: Bool
+    var allowsAutomaticUpdates: Bool
+    private(set) var checkForUpdatesCallCount = 0
+
+    private var observers: [@MainActor () -> Void] = []
+
+    init(
+        canCheckForUpdates: Bool,
+        automaticallyChecksForUpdates: Bool,
+        automaticallyDownloadsUpdates: Bool,
+        allowsAutomaticUpdates: Bool
+    ) {
+        self.canCheckForUpdates = canCheckForUpdates
+        self.automaticallyChecksForUpdates = automaticallyChecksForUpdates
+        self.automaticallyDownloadsUpdates = automaticallyDownloadsUpdates
+        self.allowsAutomaticUpdates = allowsAutomaticUpdates
+    }
+
+    func checkForUpdates() {
+        checkForUpdatesCallCount += 1
+    }
+
+    func installObservers(_ onChange: @escaping @MainActor () -> Void) -> [NSKeyValueObservation] {
+        observers.append(onChange)
+        return []
+    }
+
+    func publishState(
+        canCheckForUpdates: Bool? = nil,
+        automaticallyChecksForUpdates: Bool? = nil,
+        automaticallyDownloadsUpdates: Bool? = nil,
+        allowsAutomaticUpdates: Bool? = nil
+    ) {
+        if let canCheckForUpdates {
+            self.canCheckForUpdates = canCheckForUpdates
+        }
+        if let automaticallyChecksForUpdates {
+            self.automaticallyChecksForUpdates = automaticallyChecksForUpdates
+        }
+        if let automaticallyDownloadsUpdates {
+            self.automaticallyDownloadsUpdates = automaticallyDownloadsUpdates
+        }
+        if let allowsAutomaticUpdates {
+            self.allowsAutomaticUpdates = allowsAutomaticUpdates
+        }
+
+        observers.forEach { $0() }
     }
 }

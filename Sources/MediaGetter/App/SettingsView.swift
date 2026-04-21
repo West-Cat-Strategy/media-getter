@@ -12,13 +12,18 @@ struct SettingsView: View {
                         .font(.headline)
                     Text("Updates are delivered from the latest GitHub release feed.")
                         .foregroundStyle(.secondary)
+                    if let updatesUnavailableMessage = appUpdateManager.updatesUnavailableMessage {
+                        Text(updatesUnavailableMessage)
+                            .foregroundStyle(.secondary)
+                    }
                 }
                 .padding(.vertical, 4)
 
                 Toggle("Automatically check for updates", isOn: $appUpdateManager.automaticallyChecksForUpdates)
+                    .disabled(!appUpdateManager.canConfigureAutomaticUpdateChecks)
 
                 Toggle("Download updates in the background", isOn: $appUpdateManager.automaticallyDownloadsUpdates)
-                    .disabled(!appUpdateManager.automaticallyChecksForUpdates || !appUpdateManager.allowsAutomaticUpdates)
+                    .disabled(!appUpdateManager.canConfigureAutomaticDownloads)
 
                 Button("Check for Updates...") {
                     appUpdateManager.checkForUpdates()
