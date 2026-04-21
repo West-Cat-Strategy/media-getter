@@ -3,6 +3,7 @@ import SwiftUI
 struct SettingsView: View {
     @Bindable var appState: AppState
     @Bindable var appUpdateManager: AppUpdateManager
+    @State private var isAuthSheetPresented = false
 
     var body: some View {
         Form {
@@ -25,10 +26,85 @@ struct SettingsView: View {
                 Toggle("Download updates in the background", isOn: $appUpdateManager.automaticallyDownloadsUpdates)
                     .disabled(!appUpdateManager.canConfigureAutomaticDownloads)
 
-                Button("Check for Updates...") {
-                    appUpdateManager.checkForUpdates()
+                VStack(alignment: .leading, spacing: 8) {
+                    Text(appUpdateManager.updateStatusTitle)
+                        .font(.headline)
+                    Text(appUpdateManager.updateStatusDetail)
+                        .foregroundStyle(.secondary)
+
+                    if let availableUpdate = appUpdateManager.availableUpdate {
+                        VStack(alignment: .leading, spacing: 4) {
+                            Text(availableUpdate.versionDescription)
+                            if !availableUpdate.compatibilityDescription.isEmpty {
+                                Text(availableUpdate.compatibilityDescription)
+                                    .foregroundStyle(.secondary)
+                            }
+                            if let expectedContentLength = availableUpdate.expectedContentLength {
+                                Text(Formatters.bytes(expectedContentLength))
+                                    .foregroundStyle(.secondary)
+                            }
+                            if let releaseNotes = availableUpdate.releaseNotes {
+                                Text(releaseNotes)
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                                    .lineLimit(5)
+                            }
+                        }
+                        .padding(.top, 2)
+                    }
+
+                    switch appUpdateManager.updatePhase {
+                    case .checking, .installing:
+                        ProgressView()
+                    case .downloading:
+                        if let progress = appUpdateManager.downloadProgress {
+                            ProgressView(value: progress)
+                        } else {
+                            ProgressView()
+                        }
+                    case .extracting:
+                        ProgressView(value: appUpdateManager.extractionProgress)
+                    case .idle, .updateAvailable, .readyToInstall, .upToDate, .failed:
+                        EmptyView()
+                    }
+
+                    if let transferProgressLabel = appUpdateManager.transferProgressLabel {
+                        Text(transferProgressLabel)
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    } else if appUpdateManager.updatePhase == .extracting {
+                        Text(appUpdateManager.extractionProgressLabel)
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
                 }
-                .disabled(!appUpdateManager.canCheckForUpdates)
+                .padding(.vertical, 4)
+
+                HStack {
+                    Button(appUpdateManager.primaryUpdateActionTitle) {
+                        appUpdateManager.performPrimaryUpdateAction()
+                    }
+                    .disabled(!appUpdateManager.canPerformPrimaryUpdateAction)
+
+                    if appUpdateManager.canCancelUpdateSession {
+                        Button("Cancel") {
+                            appUpdateManager.cancelUpdateSession()
+                        }
+                    }
+
+                    if let dismissPendingUpdateTitle = appUpdateManager.dismissPendingUpdateTitle,
+                       appUpdateManager.canDismissPendingUpdate {
+                        Button(dismissPendingUpdateTitle) {
+                            appUpdateManager.dismissPendingUpdate()
+                        }
+                    }
+
+                    if appUpdateManager.canSkipPendingUpdate {
+                        Button("Skip This Version") {
+                            appUpdateManager.skipPendingUpdate()
+                        }
+                    }
+                }
             }
 
             Section("Defaults") {
@@ -84,9 +160,39 @@ struct SettingsView: View {
                 Toggle("Generate subtitles after trim exports", isOn: $appState.preferencesStore.defaultTrimAutoSubtitles)
 
                 Picker("Generated subtitle output", selection: $appState.preferencesStore.defaultSubtitleOutputFormat) {
-                    ForEach(TranscriptionOutputFormat.allCases) { format in
+                    ForEach(TranscriptionOutputFormat.subtitleFormats) { format in
                         Text(format.title).tag(format)
                     }
+                }
+            }
+
+            Section("Download Authentication") {
+                Picker(
+                    "Default auth profile",
+                    selection: Binding(
+                        get: { appState.authProfileStore.defaultProfileID },
+                        set: { appState.setDefaultAuthProfile($0) }
+                    )
+                ) {
+                    Text("None")
+                        .tag(UUID?.none)
+
+                    ForEach(appState.authProfileStore.profiles) { profile in
+                        Text(profile.name)
+                            .tag(Optional(profile.id))
+                    }
+                }
+
+                VStack(alignment: .leading, spacing: 4) {
+                    Text(appState.authProfileStore.defaultProfile?.name ?? "No default auth profile")
+                        .font(.headline)
+                    Text(appState.authProfileStore.defaultProfile?.summary ?? "Downloads use public access only unless you choose a profile.")
+                        .foregroundStyle(.secondary)
+                }
+                .padding(.vertical, 4)
+
+                Button("Configure Auth…") {
+                    isAuthSheetPresented = true
                 }
             }
 
@@ -188,5 +294,12 @@ struct SettingsView: View {
             }
         }
         .formStyle(.grouped)
+        .sheet(isPresented: $isAuthSheetPresented) {
+            DownloadAuthProfileSheet(
+                appState: appState,
+                context: .settings,
+                initialProfileID: appState.authProfileStore.defaultProfileID
+            )
+        }
     }
 }

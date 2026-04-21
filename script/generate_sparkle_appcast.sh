@@ -19,6 +19,8 @@ ZIP_PATH="${ZIP_PATH:-$DIST_PATH/${APP_NAME}.zip}"
 APPCAST_PATH="${APPCAST_PATH:-$DIST_PATH/appcast.xml}"
 ZIP_PATH_FILE="${ZIP_PATH_FILE:-$BUILD_ROOT/zip-path.txt}"
 APPCAST_PATH_FILE="${APPCAST_PATH_FILE:-$BUILD_ROOT/appcast-path.txt}"
+MINIMUM_SYSTEM_VERSION="${MINIMUM_SYSTEM_VERSION:-}"
+HARDWARE_REQUIREMENTS="${HARDWARE_REQUIREMENTS:-}"
 
 if [[ -z "$APP_PATH" ]] && [[ -f "$EXPORTED_APP_PATH_FILE" ]]; then
   APP_PATH="$(<"$EXPORTED_APP_PATH_FILE")"
@@ -66,6 +68,31 @@ fi
 
 VERSION_STRING="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$APP_PATH/Contents/Info.plist")"
 BUILD_NUMBER="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleVersion' "$APP_PATH/Contents/Info.plist")"
+EXECUTABLE_NAME="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleExecutable' "$APP_PATH/Contents/Info.plist" 2>/dev/null || printf '%s\n' "$APP_NAME")"
+
+if [[ -z "$MINIMUM_SYSTEM_VERSION" ]]; then
+  MINIMUM_SYSTEM_VERSION="$(/usr/libexec/PlistBuddy -c 'Print :LSMinimumSystemVersion' "$APP_PATH/Contents/Info.plist" 2>/dev/null || true)"
+fi
+
+if [[ -z "$HARDWARE_REQUIREMENTS" ]]; then
+  EXECUTABLE_PATH="$APP_PATH/Contents/MacOS/$EXECUTABLE_NAME"
+  if [[ -f "$EXECUTABLE_PATH" ]]; then
+    ARCH_INFO="$(/usr/bin/lipo -info "$EXECUTABLE_PATH" 2>/dev/null || /usr/bin/file -b "$EXECUTABLE_PATH" 2>/dev/null || true)"
+    if [[ "$ARCH_INFO" == *"arm64"* ]] && [[ "$ARCH_INFO" != *"x86_64"* ]]; then
+      HARDWARE_REQUIREMENTS="arm64"
+    fi
+  fi
+fi
+
+MINIMUM_SYSTEM_VERSION_XML=""
+if [[ -n "$MINIMUM_SYSTEM_VERSION" ]]; then
+  MINIMUM_SYSTEM_VERSION_XML="      <sparkle:minimumSystemVersion>${MINIMUM_SYSTEM_VERSION}</sparkle:minimumSystemVersion>"
+fi
+
+HARDWARE_REQUIREMENTS_XML=""
+if [[ -n "$HARDWARE_REQUIREMENTS" ]]; then
+  HARDWARE_REQUIREMENTS_XML="      <sparkle:hardwareRequirements>${HARDWARE_REQUIREMENTS}</sparkle:hardwareRequirements>"
+fi
 
 PUB_DATE="$(
   python3 - "$RELEASE_PUBLISHED_AT" <<'PY'
@@ -120,6 +147,8 @@ cat >"$APPCAST_PATH" <<EOF
       <link>${RELEASE_URL}</link>
       <sparkle:version>${BUILD_NUMBER}</sparkle:version>
       <sparkle:shortVersionString>${VERSION_STRING}</sparkle:shortVersionString>
+${MINIMUM_SYSTEM_VERSION_XML}
+${HARDWARE_REQUIREMENTS_XML}
       <pubDate>${PUB_DATE}</pubDate>
       <description><![CDATA[
 ${RELEASE_NOTES_HTML}
@@ -128,7 +157,8 @@ ${RELEASE_NOTES_HTML}
         url="${DOWNLOAD_URL}"
         type="application/octet-stream"
         length="${ARCHIVE_LENGTH}"
-        sparkle:edSignature="${ARCHIVE_ED_SIGNATURE}" />
+        sparkle:edSignature="${ARCHIVE_ED_SIGNATURE}"
+        sparkle:os="macos" />
     </item>
   </channel>
 </rss>

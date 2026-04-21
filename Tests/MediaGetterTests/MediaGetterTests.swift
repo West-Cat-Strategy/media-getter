@@ -170,7 +170,8 @@ final class MediaGetterTests: XCTestCase {
                     outputFormat: .srt
                 ),
                 filenameTemplate: "%(title)s",
-                overwriteExisting: true
+                overwriteExisting: true,
+                resolvedAuth: nil
             ),
             toolURL: toolURL,
             denoURL: denoURL,
@@ -186,6 +187,243 @@ final class MediaGetterTests: XCTestCase {
         XCTAssertFalse(command.arguments.contains("--embed-subs"))
         XCTAssertTrue(command.arguments.contains("137+140"))
         XCTAssertEqual(command.environment["PATH"], "/tmp/tools:/usr/bin:/bin:/usr/sbin:/sbin")
+    }
+
+    func testDownloadCommandSupportsBrowserCookieImport() {
+        let service = makeDownloadService()
+        let command = service.buildCommand(
+            for: makeDownloadRequest(
+                resolvedAuth: .browser(
+                    BrowserDownloadAuthConfiguration(
+                        browser: .firefox,
+                        profile: "Work",
+                        container: "Personal"
+                    )
+                )
+            ),
+            toolURL: URL(fileURLWithPath: "/tmp/yt-dlp"),
+            denoURL: URL(fileURLWithPath: "/tmp/deno"),
+            toolsDirectoryURL: URL(fileURLWithPath: "/tmp/tools", isDirectory: true)
+        )
+
+        XCTAssertTrue(command.arguments.contains("--cookies-from-browser"))
+        XCTAssertTrue(command.arguments.contains("firefox:Work::Personal"))
+    }
+
+    func testDownloadCommandSupportsManagedCookieFile() {
+        let service = makeDownloadService()
+        let command = service.buildCommand(
+            for: makeDownloadRequest(resolvedAuth: .cookieFile(path: "/tmp/auth/cookies.txt")),
+            toolURL: URL(fileURLWithPath: "/tmp/yt-dlp"),
+            denoURL: URL(fileURLWithPath: "/tmp/deno"),
+            toolsDirectoryURL: URL(fileURLWithPath: "/tmp/tools", isDirectory: true)
+        )
+
+        XCTAssertTrue(command.arguments.contains("--cookies"))
+        XCTAssertTrue(command.arguments.contains("/tmp/auth/cookies.txt"))
+    }
+
+    func testDownloadCommandSupportsCookieHeaderOnly() {
+        let service = makeDownloadService()
+        let command = service.buildCommand(
+            for: makeDownloadRequest(
+                resolvedAuth: .advancedHeaders(
+                    cookieHeader: "sid=abc123",
+                    userAgent: nil,
+                    headers: []
+                )
+            ),
+            toolURL: URL(fileURLWithPath: "/tmp/yt-dlp"),
+            denoURL: URL(fileURLWithPath: "/tmp/deno"),
+            toolsDirectoryURL: URL(fileURLWithPath: "/tmp/tools", isDirectory: true)
+        )
+
+        XCTAssertTrue(command.arguments.contains("--add-header"))
+        XCTAssertTrue(command.arguments.contains("Cookie:sid=abc123"))
+        XCTAssertFalse(command.arguments.contains("--user-agent"))
+    }
+
+    func testDownloadCommandSupportsUserAgentAndCustomHeaders() {
+        let service = makeDownloadService()
+        let command = service.buildCommand(
+            for: makeDownloadRequest(
+                resolvedAuth: .advancedHeaders(
+                    cookieHeader: "sid=abc123",
+                    userAgent: "MediaGetterTest/1.0",
+                    headers: [
+                        DownloadHeaderField(name: "X-Test-Header", value: "enabled"),
+                        DownloadHeaderField(name: "Referer", value: "https://example.com")
+                    ]
+                )
+            ),
+            toolURL: URL(fileURLWithPath: "/tmp/yt-dlp"),
+            denoURL: URL(fileURLWithPath: "/tmp/deno"),
+            toolsDirectoryURL: URL(fileURLWithPath: "/tmp/tools", isDirectory: true)
+        )
+
+        XCTAssertTrue(command.arguments.contains("--user-agent"))
+        XCTAssertTrue(command.arguments.contains("MediaGetterTest/1.0"))
+        XCTAssertTrue(command.arguments.contains("X-Test-Header:enabled"))
+        XCTAssertTrue(command.arguments.contains("Referer:https://example.com"))
+    }
+
+    func testDownloadProbeAndDownloadShareAuthArgumentMapping() {
+        let auth = ResolvedDownloadAuth.advancedHeaders(
+            cookieHeader: "sid=abc123",
+            userAgent: "MediaGetterTest/1.0",
+            headers: [DownloadHeaderField(name: "X-Test-Header", value: "enabled")]
+        )
+        let authArguments = DownloadAuthCommandBuilder.arguments(for: auth)
+
+        let probeService = DownloadProbeService(
+            toolchainManager: ToolchainManager(overrideToolsDirectory: FileManager.default.temporaryDirectory),
+            processRunner: ProcessRunner()
+        )
+        let probeCommand = probeService.buildCommand(
+            urlString: "https://example.com/watch?v=123",
+            auth: auth,
+            toolURL: URL(fileURLWithPath: "/tmp/yt-dlp"),
+            denoURL: URL(fileURLWithPath: "/tmp/deno"),
+            toolsDirectoryURL: URL(fileURLWithPath: "/tmp/tools", isDirectory: true)
+        )
+
+        let downloadCommand = makeDownloadService().buildCommand(
+            for: makeDownloadRequest(resolvedAuth: auth),
+            toolURL: URL(fileURLWithPath: "/tmp/yt-dlp"),
+            denoURL: URL(fileURLWithPath: "/tmp/deno"),
+            toolsDirectoryURL: URL(fileURLWithPath: "/tmp/tools", isDirectory: true)
+        )
+
+        XCTAssertTrue(probeCommand.arguments.containsSubsequence(authArguments))
+        XCTAssertTrue(downloadCommand.arguments.containsSubsequence(authArguments))
+    }
+
+    @MainActor
+    func testAuthProfileStorePersistsProfilesAndDefaultSelection() throws {
+        let root = try makeTemporaryDirectory()
+        let secretStore = InMemorySecretStore()
+        let store = AuthProfileStore(
+            persistenceURL: root.appendingPathComponent("auth_profiles.json"),
+            profilesDirectoryURL: root.appendingPathComponent("AuthProfiles", isDirectory: true),
+            secretStore: secretStore
+        )
+
+        let savedProfile = try store.saveProfile(
+            from: DownloadAuthProfileDraft(
+                name: "Browser Profile",
+                strategyKind: .browser,
+                browser: .chrome,
+                browserProfile: "Profile 1",
+                markAsDefault: true
+            )
+        )
+
+        let reloadedStore = AuthProfileStore(
+            persistenceURL: root.appendingPathComponent("auth_profiles.json"),
+            profilesDirectoryURL: root.appendingPathComponent("AuthProfiles", isDirectory: true),
+            secretStore: secretStore
+        )
+
+        XCTAssertEqual(reloadedStore.profiles.count, 1)
+        XCTAssertEqual(reloadedStore.defaultProfileID, savedProfile.id)
+        XCTAssertEqual(reloadedStore.defaultProfile?.name, "Browser Profile")
+    }
+
+    @MainActor
+    func testAuthProfileStoreDeletesSecretsAndManagedCookieFiles() throws {
+        let root = try makeTemporaryDirectory()
+        let secretStore = InMemorySecretStore()
+        let store = AuthProfileStore(
+            persistenceURL: root.appendingPathComponent("auth_profiles.json"),
+            profilesDirectoryURL: root.appendingPathComponent("AuthProfiles", isDirectory: true),
+            secretStore: secretStore
+        )
+        let cookieSourceURL = root.appendingPathComponent("exported-cookies.txt")
+        try makeValidCookieFile(at: cookieSourceURL)
+
+        let cookieProfile = try store.saveProfile(
+            from: DownloadAuthProfileDraft(
+                name: "Cookie File",
+                strategyKind: .cookieFile,
+                selectedCookieFilePath: cookieSourceURL.path,
+                markAsDefault: false
+            )
+        )
+        let advancedProfile = try store.saveProfile(
+            from: DownloadAuthProfileDraft(
+                name: "Advanced",
+                strategyKind: .advancedHeaders,
+                cookieHeader: "sid=abc123",
+                userAgent: "MediaGetterTest/1.0",
+                customHeaders: [DownloadHeaderField(name: "X-Test-Header", value: "enabled")],
+                markAsDefault: false
+            )
+        )
+
+        let managedCookieURL = root
+            .appendingPathComponent("AuthProfiles", isDirectory: true)
+            .appendingPathComponent(cookieProfile.id.uuidString, isDirectory: true)
+            .appendingPathComponent("cookies.txt")
+
+        XCTAssertTrue(FileManager.default.fileExists(atPath: managedCookieURL.path))
+        XCTAssertNotNil(secretStore.secrets[advancedProfile.id.uuidString])
+
+        try store.deleteProfile(id: cookieProfile.id)
+        try store.deleteProfile(id: advancedProfile.id)
+
+        XCTAssertFalse(FileManager.default.fileExists(atPath: managedCookieURL.path))
+        XCTAssertNil(secretStore.secrets[advancedProfile.id.uuidString])
+    }
+
+    @MainActor
+    func testAppStateSeedsDefaultAuthProfileAndSnapshotsResolvedAuthOnEnqueue() throws {
+        let suiteName = "MediaGetterTests.\(UUID().uuidString)"
+        let defaults = UserDefaults(suiteName: suiteName)!
+        defer {
+            defaults.removePersistentDomain(forName: suiteName)
+        }
+
+        let root = try makeTemporaryDirectory()
+        let secretStore = InMemorySecretStore()
+        let authStore = AuthProfileStore(
+            persistenceURL: root.appendingPathComponent("auth_profiles.json"),
+            profilesDirectoryURL: root.appendingPathComponent("AuthProfiles", isDirectory: true),
+            secretStore: secretStore
+        )
+        let defaultProfile = try authStore.saveProfile(
+            from: DownloadAuthProfileDraft(
+                name: "Default Browser",
+                strategyKind: .browser,
+                browser: .safari,
+                markAsDefault: true
+            )
+        )
+
+        let appState = AppState(
+            preferencesStore: PreferencesStore(defaults: defaults),
+            historyStore: HistoryStore(persistenceURL: root.appendingPathComponent("history.json")),
+            authProfileStore: authStore
+        )
+
+        XCTAssertEqual(appState.downloadDraft.selectedAuthProfileID, defaultProfile.id)
+
+        appState.downloadDraft.urlString = "https://example.com/watch?v=123"
+        appState.downloadDraft.subtitleWorkflow = .off(format: .srt)
+        appState.downloadDraft.metadata = MediaMetadata(
+            source: .remote("https://example.com/watch?v=123"),
+            title: "Example"
+        )
+
+        appState.enqueueDownload()
+
+        guard case .download(let request)? = appState.queueStore.selectedJob?.request.payload else {
+            return XCTFail("Expected a queued download request.")
+        }
+
+        XCTAssertEqual(
+            request.resolvedAuth,
+            .browser(BrowserDownloadAuthConfiguration(browser: .safari, profile: nil, container: nil))
+        )
     }
 
     func testDownloadArtifactDetectionCapturesSubtitleSidecars() {
@@ -385,101 +623,94 @@ final class MediaGetterTests: XCTestCase {
         XCTAssertEqual(reloaded.defaultSubtitleOutputFormat, .vtt)
     }
 
-    @MainActor
-    func testAutoSubtitleFollowUpUsesFallbackPolicyWhenNoSourceSubtitleArtifactsExist() {
-        let appState = AppState(
-            preferencesStore: PreferencesStore(defaults: UserDefaults(suiteName: "MediaGetterTests.\(UUID().uuidString)")!)
-        )
-        let outputURL = URL(fileURLWithPath: "/tmp/sample-output.mp4")
-        let workflowID = UUID()
-        let request = DownloadRequest(
-            sourceURLString: "https://example.com/video",
-            destinationDirectory: URL(fileURLWithPath: "/tmp", isDirectory: true),
-            selectedFormatID: "best",
-            preset: .mp4Video,
-            subtitleWorkflow: SubtitleWorkflowOptions(
-                sourcePolicy: .preferSourceThenGenerate,
-                outputFormat: .srt
-            ),
-            filenameTemplate: "%(title)s",
-            overwriteExisting: true
-        )
-        let job = JobRecord(
-            id: UUID(),
-            request: JobRequest(
-                workflowID: workflowID,
-                kind: .download,
-                title: "Sample",
-                subtitle: OutputPresetID.mp4Video.title,
-                source: .remote("https://example.com/video"),
-                preset: .mp4Video,
-                transcriptionOutputFormat: nil,
-                payload: .download(request)
-            ),
-            status: .completed,
-            progress: 1,
-            phase: outputURL.lastPathComponent,
-            logs: [],
-            artifacts: [JobArtifact(kind: .media, url: outputURL, isPrimary: true)],
-            createdAt: Date(),
-            startedAt: Date(),
-            completedAt: Date(),
-            errorMessage: nil
-        )
-
-        let followUp = appState.makeAutoSubtitleJobRequest(for: job)
-
-        XCTAssertEqual(followUp?.workflowID, workflowID)
-        XCTAssertEqual(followUp?.parentJobID, job.id)
-        XCTAssertEqual(followUp?.subtitle, "Auto subtitles (.srt)")
-        XCTAssertEqual(followUp?.transcriptionOutputFormat, .srt)
+    func testSubtitleWorkflowBurnFlagDefaultsToFalse() {
+        let workflow = SubtitleWorkflowOptions(sourcePolicy: .generateOnly, outputFormat: .srt)
+        XCTAssertFalse(workflow.burnInVideo)
     }
 
-    @MainActor
-    func testAutoSubtitleFollowUpSkipsWhenSourceSubtitleArtifactsExist() {
-        let appState = AppState(
-            preferencesStore: PreferencesStore(defaults: UserDefaults(suiteName: "MediaGetterTests.\(UUID().uuidString)")!)
-        )
-        let outputURL = URL(fileURLWithPath: "/tmp/sample-output.mp4")
-        let subtitleURL = URL(fileURLWithPath: "/tmp/sample-output.en.vtt")
-        let request = DownloadRequest(
-            sourceURLString: "https://example.com/video",
-            destinationDirectory: URL(fileURLWithPath: "/tmp", isDirectory: true),
-            selectedFormatID: "best",
-            preset: .mp4Video,
-            subtitleWorkflow: SubtitleWorkflowOptions(
-                sourcePolicy: .preferSourceThenGenerate,
-                outputFormat: .srt
-            ),
-            filenameTemplate: "%(title)s",
-            overwriteExisting: true
-        )
-        let job = JobRecord(
-            id: UUID(),
-            request: JobRequest(
-                kind: .download,
-                title: "Sample",
-                subtitle: OutputPresetID.mp4Video.title,
-                source: .remote("https://example.com/video"),
-                preset: .mp4Video,
-                transcriptionOutputFormat: nil,
-                payload: .download(request)
-            ),
-            status: .completed,
-            progress: 1,
-            phase: outputURL.lastPathComponent,
-            logs: [],
-            artifacts: [
-                JobArtifact(kind: .media, url: outputURL, isPrimary: true),
-                JobArtifact(kind: .subtitle, url: subtitleURL, isPrimary: false)
-            ],
-            createdAt: Date(),
-            startedAt: Date(),
-            completedAt: Date(),
-            errorMessage: nil
+    func testTranscodeServiceBuildBurnedSubtitleCommandUsesExpectedFlags() {
+        let service = TranscodeService(
+            toolchainManager: ToolchainManager(overrideToolsDirectory: FileManager.default.temporaryDirectory),
+            processRunner: ProcessRunner()
         )
 
-        XCTAssertNil(appState.makeAutoSubtitleJobRequest(for: job))
+        let command = service.buildBurnedSubtitleCommand(
+            inputURL: URL(fileURLWithPath: "/tmp/source-video.mp4"),
+            subtitleURL: URL(fileURLWithPath: "/tmp/source-video.srt"),
+            outputURL: URL(fileURLWithPath: "/tmp/source-video-caption-burn.mp4"),
+            preset: .mp4Video,
+            toolURL: URL(fileURLWithPath: "/tmp/ffmpeg")
+        )
+
+        XCTAssertTrue(command.arguments.contains("-vf"))
+        XCTAssertTrue(command.arguments.contains(where: { $0.contains("subtitles='") }))
+        XCTAssertTrue(command.arguments.contains("-c:v"))
+        XCTAssertTrue(command.arguments.contains("libx264"))
+        XCTAssertTrue(command.arguments.contains("-c:a"))
+        XCTAssertTrue(command.arguments.contains("copy"))
+        XCTAssertTrue(command.arguments.contains("+faststart"))
+    }
+
+    func testTranscodeServiceNormalizesCanonicalSRTSidecarWithoutFFmpegWhenSourceIsAlreadySRT() async throws {
+        let tempDirectory = try makeTemporaryDirectory()
+        let mediaURL = tempDirectory.appendingPathComponent("sample-output.mp4")
+        let sourceSubtitleURL = tempDirectory.appendingPathComponent("sample-output.en.srt")
+        try Data("media".utf8).write(to: mediaURL)
+        try Data("1\n00:00:00,000 --> 00:00:01,000\nHello\n".utf8).write(to: sourceSubtitleURL)
+
+        let service = TranscodeService(
+            toolchainManager: ToolchainManager(overrideToolsDirectory: tempDirectory),
+            processRunner: ProcessRunner()
+        )
+
+        let canonicalURL = try await service.normalizeSubtitleToSRT(
+            subtitleURL: sourceSubtitleURL,
+            mediaURL: mediaURL,
+            overwriteExisting: true
+        ) { _ in }
+
+        XCTAssertEqual(canonicalURL.lastPathComponent, "sample-output.srt")
+        XCTAssertEqual(try String(contentsOf: canonicalURL), try String(contentsOf: sourceSubtitleURL))
+    }
+
+    func testTranscriptionExecuteSupportsCustomSubtitleSidecarPath() async throws {
+        let fixture = try makeTranscriptionFixture(
+            whisperScript: """
+            #!/bin/sh
+            output_base=""
+            ext=".txt"
+            while [ "$#" -gt 0 ]; do
+              case "$1" in
+                -of|--output-file) output_base="$2"; shift 2 ;;
+                -otxt|--output-txt) ext=".txt"; shift ;;
+                -osrt|--output-srt) ext=".srt"; shift ;;
+                -ovtt|--output-vtt) ext=".vtt"; shift ;;
+                *) shift ;;
+              esac
+            done
+            echo "progress = 100%"
+            printf 'subtitle sidecar' > "${output_base}${ext}"
+            """
+        )
+
+        let service = TranscriptionService(
+            toolchainManager: fixture.toolchain,
+            processRunner: ProcessRunner(),
+            temporaryDirectory: fixture.temporaryDirectory
+        )
+        let outputURL = fixture.destinationDirectory.appendingPathComponent("session-video.srt")
+
+        let result = try await service.execute(
+            inputURL: fixture.request.inputURL,
+            metadata: fixture.metadata,
+            outputURL: outputURL,
+            outputFormat: .srt,
+            overwriteExisting: true
+        ) { _ in }
+
+        XCTAssertEqual(result.outputURL, outputURL)
+        XCTAssertEqual(outputURL.lastPathComponent, "session-video.srt")
+        XCTAssertTrue(FileManager.default.fileExists(atPath: outputURL.path))
     }
 
     func testHistoryEntryDecodesLegacyOutputPathIntoArtifacts() throws {
@@ -692,6 +923,36 @@ final class MediaGetterTests: XCTestCase {
         )
     }
 
+    private func makeDownloadService() -> DownloadService {
+        DownloadService(
+            toolchainManager: ToolchainManager(overrideToolsDirectory: FileManager.default.temporaryDirectory),
+            processRunner: ProcessRunner()
+        )
+    }
+
+    private func makeDownloadRequest(resolvedAuth: ResolvedDownloadAuth?) -> DownloadRequest {
+        DownloadRequest(
+            sourceURLString: "https://example.com/watch?v=123",
+            destinationDirectory: URL(fileURLWithPath: "/tmp/downloads", isDirectory: true),
+            selectedFormatID: "137+140",
+            preset: .mp4Video,
+            subtitleWorkflow: SubtitleWorkflowOptions(
+                sourcePolicy: .preferSourceThenGenerate,
+                outputFormat: .srt
+            ),
+            filenameTemplate: "%(title)s",
+            overwriteExisting: true,
+            resolvedAuth: resolvedAuth
+        )
+    }
+
+    private func makeValidCookieFile(at url: URL) throws {
+        try """
+        # Netscape HTTP Cookie File
+        .example.com\tTRUE\t/\tFALSE\t2145916800\tsessionid\tabc123
+        """.write(to: url, atomically: true, encoding: .utf8)
+    }
+
     private func makeTemporaryDirectory() throws -> URL {
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
@@ -770,5 +1031,35 @@ private final class FakeAppUpdater: AppUpdaterControlling {
         }
 
         observers.forEach { $0() }
+    }
+}
+
+private final class InMemorySecretStore: SecretStore {
+    private(set) var secrets: [String: StoredAdvancedHeadersSecret] = [:]
+
+    func saveAdvancedHeadersSecret(_ secret: StoredAdvancedHeadersSecret, for reference: String) throws {
+        secrets[reference] = secret
+    }
+
+    func loadAdvancedHeadersSecret(for reference: String) throws -> StoredAdvancedHeadersSecret? {
+        secrets[reference]
+    }
+
+    func deleteSecret(for reference: String) throws {
+        secrets.removeValue(forKey: reference)
+    }
+}
+
+private extension Array where Element: Equatable {
+    func containsSubsequence(_ subsequence: [Element]) -> Bool {
+        guard !subsequence.isEmpty, count >= subsequence.count else { return false }
+
+        for start in 0...(count - subsequence.count) {
+            if Array(self[start..<(start + subsequence.count)]) == subsequence {
+                return true
+            }
+        }
+
+        return false
     }
 }

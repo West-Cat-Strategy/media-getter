@@ -8,10 +8,10 @@ struct MediaGetterCommands: Commands {
         SidebarCommands()
 
         CommandGroup(after: .appInfo) {
-            Button("Check for Updates...") {
-                appUpdateManager.checkForUpdates()
+            Button(appUpdateManager.primaryUpdateActionTitle) {
+                appUpdateManager.performPrimaryUpdateAction()
             }
-            .disabled(!appUpdateManager.canCheckForUpdates)
+            .disabled(!appUpdateManager.canPerformPrimaryUpdateAction)
         }
 
         CommandMenu("Media Studio") {

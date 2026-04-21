@@ -3,12 +3,30 @@ import AppKit
 import Foundation
 import Observation
 
+private enum PipelineDestinationRelay {
+    case primaryMedia
+    case artifact(JobArtifactKind)
+    case ignore
+}
+
+private struct MediaPipelineProgressPlan {
+    var exportRange: ClosedRange<Double>
+    var subtitleRange: ClosedRange<Double>?
+    var burnRange: ClosedRange<Double>?
+}
+
+private struct ResolvedSubtitleArtifacts {
+    var artifacts: [JobArtifact]
+    var canonicalSubtitleArtifact: JobArtifact?
+}
+
 @MainActor
 @Observable
 final class AppState {
     var preferencesStore: PreferencesStore
     var historyStore: HistoryStore
     var queueStore: QueueStore
+    var authProfileStore: AuthProfileStore
 
     var selectedSection: AppSection = .download
     var inspectorMode: InspectorMode?
@@ -59,12 +77,14 @@ final class AppState {
         preferencesStore: PreferencesStore = PreferencesStore(),
         historyStore: HistoryStore = HistoryStore(),
         queueStore: QueueStore = QueueStore(),
+        authProfileStore: AuthProfileStore = AuthProfileStore(),
         toolchainManager: ToolchainManager = ToolchainManager(),
         processRunner: ProcessRunner = ProcessRunner()
     ) {
         self.preferencesStore = preferencesStore
         self.historyStore = historyStore
         self.queueStore = queueStore
+        self.authProfileStore = authProfileStore
         self.processRunner = processRunner
         self.toolchainManager = toolchainManager
         self.downloadProbeService = DownloadProbeService(toolchainManager: toolchainManager, processRunner: processRunner)
@@ -90,7 +110,8 @@ final class AppState {
             selectedPreset: preferencesStore.defaultDownloadPreset,
             destinationDirectoryPath: destinationPath,
             subtitleWorkflow: defaultDownloadSubtitleWorkflow,
-            filenameTemplate: preferencesStore.filenameTemplate
+            filenameTemplate: preferencesStore.filenameTemplate,
+            selectedAuthProfileID: authProfileStore.defaultProfileID
         )
         self.convertDraft = ConvertDraft(
             selectedPreset: preferencesStore.defaultConvertPreset,
@@ -156,11 +177,18 @@ final class AppState {
             return
         }
 
+        let resolvedAuth: ResolvedDownloadAuth?
+        do {
+            resolvedAuth = try resolveSelectedDownloadAuthForCurrentDraft()
+        } catch {
+            return
+        }
+
         downloadDraft.isProbing = true
         defer { downloadDraft.isProbing = false }
 
         do {
-            let metadata = try await downloadProbeService.probe(urlString: trimmedURL)
+            let metadata = try await downloadProbeService.probe(urlString: trimmedURL, auth: resolvedAuth)
             downloadDraft.metadata = metadata
             if let preferredFormat = metadata.formats.first(where: { $0.hasVideo && $0.hasAudio }) ?? metadata.formats.first {
                 downloadDraft.selectedFormatID = preferredFormat.id
@@ -168,6 +196,98 @@ final class AppState {
             inspectorMode = .metadata
         } catch {
             alert = AppAlert(title: "Could not inspect URL", message: error.localizedDescription)
+        }
+    }
+
+    func authProfileDraft(for profileID: UUID?) -> DownloadAuthProfileDraft {
+        do {
+            return try authProfileStore.makeDraft(for: profileID)
+        } catch {
+            alert = AppAlert(title: "Could not open auth profile", message: error.localizedDescription)
+            return DownloadAuthProfileDraft(markAsDefault: false)
+        }
+    }
+
+    @discardableResult
+    func saveAuthProfile(_ draft: DownloadAuthProfileDraft, selectForDownload: Bool) -> DownloadAuthProfile? {
+        do {
+            let profile = try authProfileStore.saveProfile(from: draft)
+            if selectForDownload {
+                downloadDraft.selectedAuthProfileID = profile.id
+            }
+            return profile
+        } catch {
+            alert = AppAlert(title: "Could not save auth profile", message: error.localizedDescription)
+            return nil
+        }
+    }
+
+    func deleteAuthProfile(_ profileID: UUID) {
+        do {
+            try authProfileStore.deleteProfile(id: profileID)
+            if downloadDraft.selectedAuthProfileID == profileID {
+                downloadDraft.selectedAuthProfileID = nil
+            }
+        } catch {
+            alert = AppAlert(title: "Could not delete auth profile", message: error.localizedDescription)
+        }
+    }
+
+    func setDefaultAuthProfile(_ profileID: UUID?) {
+        authProfileStore.setDefaultProfile(id: profileID)
+        if downloadDraft.selectedAuthProfileID == nil {
+            downloadDraft.selectedAuthProfileID = profileID
+        }
+    }
+
+    func selectedDownloadAuthProfile() -> DownloadAuthProfile? {
+        authProfileStore.profile(for: downloadDraft.selectedAuthProfileID)
+    }
+
+    func downloadAuthSummary() -> String {
+        guard let profile = selectedDownloadAuthProfile() else {
+            return "No auth"
+        }
+
+        return profile.name
+    }
+
+    func downloadAuthDetail() -> String {
+        guard let profile = selectedDownloadAuthProfile() else {
+            return "Public media downloads do not send cookies or custom headers."
+        }
+
+        return "\(profile.strategyTitle) • \(profile.summary)"
+    }
+
+    func testDownloadAuthProfile(_ draft: DownloadAuthProfileDraft) async {
+        let trimmedURL = downloadDraft.urlString.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmedURL.isEmpty else {
+            alert = AppAlert(title: "Missing URL", message: "Paste a media URL before testing authentication.")
+            return
+        }
+
+        let resolvedAuth: ResolvedDownloadAuth
+        do {
+            resolvedAuth = try authProfileStore.resolvedAuth(for: draft)
+        } catch {
+            alert = AppAlert(title: "Could not test authentication", message: error.localizedDescription)
+            return
+        }
+
+        downloadDraft.isProbing = true
+        defer { downloadDraft.isProbing = false }
+
+        do {
+            let metadata = try await downloadProbeService.probe(urlString: trimmedURL, auth: resolvedAuth)
+            downloadDraft.metadata = metadata
+            if let preferredFormat = metadata.formats.first(where: { $0.hasVideo && $0.hasAudio }) ?? metadata.formats.first {
+                downloadDraft.selectedFormatID = preferredFormat.id
+            }
+            inspectorMode = .metadata
+            alert = AppAlert(title: "Authentication works", message: "The current URL inspected successfully with this profile.")
+        } catch {
+            alert = AppAlert(title: "Could not test authentication", message: error.localizedDescription)
         }
     }
 
@@ -301,7 +421,15 @@ final class AppState {
             return
         }
 
-        guard validateSubtitleWorkflow(downloadDraft.subtitleWorkflow) else { return }
+        let resolvedAuth: ResolvedDownloadAuth?
+        do {
+            resolvedAuth = try resolveSelectedDownloadAuthForCurrentDraft()
+        } catch {
+            return
+        }
+
+        downloadDraft.subtitleWorkflow = sanitizedSubtitleWorkflow(downloadDraft.subtitleWorkflow)
+        guard validateSubtitleWorkflow(downloadDraft.subtitleWorkflow, preset: downloadDraft.selectedPreset) else { return }
 
         let request = DownloadRequest(
             sourceURLString: trimmedURL,
@@ -310,7 +438,8 @@ final class AppState {
             preset: downloadDraft.selectedPreset,
             subtitleWorkflow: downloadDraft.subtitleWorkflow,
             filenameTemplate: downloadDraft.filenameTemplate.isEmpty ? preferencesStore.filenameTemplate : downloadDraft.filenameTemplate,
-            overwriteExisting: preferencesStore.overwriteExisting
+            overwriteExisting: preferencesStore.overwriteExisting,
+            resolvedAuth: resolvedAuth
         )
 
         let title = downloadDraft.metadata?.title ?? trimmedURL
@@ -335,7 +464,8 @@ final class AppState {
             return
         }
 
-        guard validateSubtitleWorkflow(convertDraft.subtitleWorkflow) else { return }
+        convertDraft.subtitleWorkflow = sanitizedSubtitleWorkflow(convertDraft.subtitleWorkflow)
+        guard validateSubtitleWorkflow(convertDraft.subtitleWorkflow, preset: convertDraft.selectedPreset) else { return }
 
         let request = ConvertRequest(
             inputURL: inputURL,
@@ -378,7 +508,8 @@ final class AppState {
             return
         }
 
-        guard validateSubtitleWorkflow(trimDraft.subtitleWorkflow) else { return }
+        trimDraft.subtitleWorkflow = sanitizedSubtitleWorkflow(trimDraft.subtitleWorkflow)
+        guard validateSubtitleWorkflow(trimDraft.subtitleWorkflow, preset: trimDraft.selectedPreset) else { return }
 
         let request = TrimRequest(
             inputURL: inputURL,
@@ -622,44 +753,6 @@ final class AppState {
         return entry.outputURL ?? entry.source.localURL
     }
 
-    func makeAutoSubtitleJobRequest(for completedJob: JobRecord) -> JobRequest? {
-        guard completedJob.status == .completed, completedJob.request.parentJobID == nil else { return nil }
-        guard let inputURL = completedJob.outputURL else { return nil }
-
-        let outputFormat: TranscriptionOutputFormat
-        switch completedJob.request.payload {
-        case .download(let request):
-            guard request.subtitleWorkflow.generatesSubtitles else { return nil }
-            if request.subtitleWorkflow.requestsSourceSubtitles, !completedJob.subtitleArtifacts.isEmpty {
-                return nil
-            }
-            outputFormat = request.subtitleWorkflow.outputFormat
-        case .convert(let request):
-            guard request.subtitleWorkflow.generatesSubtitles else { return nil }
-            outputFormat = request.subtitleWorkflow.outputFormat
-        case .trim(let request):
-            guard request.subtitleWorkflow.generatesSubtitles else { return nil }
-            outputFormat = request.subtitleWorkflow.outputFormat
-        case .transcribe:
-            return nil
-        }
-
-        let request = TranscribeRequest(
-            inputURL: inputURL,
-            destinationDirectory: inputURL.deletingLastPathComponent(),
-            outputFormat: outputFormat,
-            overwriteExisting: preferencesStore.overwriteExisting
-        )
-
-        return makeTranscribeJobRequest(
-            for: request,
-            title: completedJob.request.title,
-            workflowID: completedJob.request.workflowID,
-            parentJobID: completedJob.id,
-            subtitle: "Auto subtitles (\(outputFormat.shortTitle))"
-        )
-    }
-
     func updateTrimStart(from string: String) {
         guard let parsed = Formatters.parseTimecode(string) else { return }
         trimDraft.range.start = min(parsed, trimDraft.range.end)
@@ -723,18 +816,457 @@ final class AppState {
 
     private func handleCompletedJob(_ job: JobRecord) {
         historyStore.record(job: job)
-
-        guard isTranscriptionReady, let followUpRequest = makeAutoSubtitleJobRequest(for: job) else {
-            return
-        }
-
-        queueStore.enqueue(followUpRequest)
     }
 
-    private func validateSubtitleWorkflow(_ workflow: SubtitleWorkflowOptions) -> Bool {
+    func makeAutoSubtitleJobRequest(for job: JobRecord) -> JobRequest? {
+        let workflow: SubtitleWorkflowOptions
+        let overwriteExisting: Bool
+
+        switch job.request.payload {
+        case .download(let request):
+            workflow = request.subtitleWorkflow
+            overwriteExisting = request.overwriteExisting
+        case .convert(let request):
+            workflow = request.subtitleWorkflow
+            overwriteExisting = request.overwriteExisting
+        case .trim(let request):
+            workflow = request.subtitleWorkflow
+            overwriteExisting = request.overwriteExisting
+        case .transcribe:
+            return nil
+        }
+
+        guard workflow.generatesSubtitles else { return nil }
+        guard !job.artifacts.contains(where: \.isSubtitleArtifact) else { return nil }
+        guard let mediaArtifact = job.artifacts.first(where: { $0.kind == .media }) else { return nil }
+
+        let followUpRequest = TranscribeRequest(
+            inputURL: mediaArtifact.url,
+            destinationDirectory: mediaArtifact.url.deletingLastPathComponent(),
+            outputFormat: workflow.outputFormat,
+            overwriteExisting: overwriteExisting
+        )
+
+        return makeTranscribeJobRequest(
+            for: followUpRequest,
+            title: mediaArtifact.displayName,
+            workflowID: job.request.workflowID,
+            parentJobID: job.id,
+            subtitle: "Auto subtitles (\(workflow.outputFormat.shortTitle))"
+        )
+    }
+
+    private func sanitizedSubtitleWorkflow(_ workflow: SubtitleWorkflowOptions) -> SubtitleWorkflowOptions {
+        var sanitizedWorkflow = workflow
+        if sanitizedWorkflow.generatesSubtitles, !sanitizedWorkflow.outputFormat.isSubtitleFormat {
+            sanitizedWorkflow.outputFormat = .srt
+        }
+        return sanitizedWorkflow
+    }
+
+    private func validateSubtitleWorkflow(_ workflow: SubtitleWorkflowOptions, preset: OutputPresetID) -> Bool {
+        if workflow.burnInVideo {
+            guard workflow.isEnabled else {
+                alert = AppAlert(
+                    title: "Enable subtitles first",
+                    message: "Turn on subtitle handling before burning captions into a video export."
+                )
+                return false
+            }
+
+            guard !preset.audioOnly else {
+                alert = AppAlert(
+                    title: "Burned captions need video",
+                    message: "Caption burn-in is only available for video exports."
+                )
+                return false
+            }
+        }
+
         guard workflow.needsLocalRuntime, !isTranscriptionReady else { return true }
         alert = AppAlert(title: "Transcription runtime incomplete", message: transcriptionRuntimeDetail)
         return false
+    }
+
+    private func resolveSelectedDownloadAuthForCurrentDraft() throws -> ResolvedDownloadAuth? {
+        guard let selectedAuthProfileID = downloadDraft.selectedAuthProfileID else {
+            return nil
+        }
+
+        do {
+            return try authProfileStore.resolvedAuth(for: selectedAuthProfileID)
+        } catch {
+            if authProfileStore.defaultProfileID == selectedAuthProfileID {
+                authProfileStore.setDefaultProfile(id: nil)
+            }
+            downloadDraft.selectedAuthProfileID = nil
+            alert = AppAlert(
+                title: "Authentication profile unavailable",
+                message: "\(error.localizedDescription)\nChoose another profile or continue without auth."
+            )
+            throw error
+        }
+    }
+
+    private func mediaPipelineProgressPlan(
+        for workflow: SubtitleWorkflowOptions,
+        burnCaptions: Bool
+    ) -> MediaPipelineProgressPlan {
+        guard workflow.needsSubtitleArtifacts else {
+            return MediaPipelineProgressPlan(exportRange: 0...1, subtitleRange: nil, burnRange: nil)
+        }
+
+        if burnCaptions {
+            return MediaPipelineProgressPlan(
+                exportRange: 0...0.64,
+                subtitleRange: 0.64...0.88,
+                burnRange: 0.88...1
+            )
+        }
+
+        return MediaPipelineProgressPlan(
+            exportRange: 0...0.74,
+            subtitleRange: 0.74...1,
+            burnRange: nil
+        )
+    }
+
+    private func subrange(
+        of range: ClosedRange<Double>,
+        from lowerFraction: Double,
+        to upperFraction: Double
+    ) -> ClosedRange<Double> {
+        let width = range.upperBound - range.lowerBound
+        let lowerBound = range.lowerBound + width * lowerFraction
+        let upperBound = range.lowerBound + width * upperFraction
+        return lowerBound...upperBound
+    }
+
+    private func relayPipelineEvent(
+        _ event: JobEvent,
+        progressRange: ClosedRange<Double>,
+        destinationRelay: PipelineDestinationRelay,
+        onEvent: @escaping @Sendable (JobEvent) async -> Void
+    ) async {
+        switch event {
+        case .progress(let progress):
+            let clamped = max(0, min(progress, 1))
+            let scaled = progressRange.lowerBound + (progressRange.upperBound - progressRange.lowerBound) * clamped
+            await onEvent(.progress(scaled))
+        case .destination(let url):
+            switch destinationRelay {
+            case .primaryMedia:
+                await onEvent(.destination(url))
+            case .artifact(let kind):
+                await onEvent(.artifact(JobArtifact(kind: kind, url: url, isPrimary: false)))
+            case .ignore:
+                break
+            }
+        case .artifact(let artifact):
+            await onEvent(.artifact(artifact))
+        case .phase(let phase):
+            await onEvent(.phase(phase))
+        case .log(let log):
+            await onEvent(.log(log))
+        }
+    }
+
+    private func mergedArtifacts(
+        _ artifacts: [JobArtifact],
+        adding newArtifacts: [JobArtifact]
+    ) -> [JobArtifact] {
+        var merged = artifacts
+        for artifact in newArtifacts {
+            if let existingIndex = merged.firstIndex(where: { $0.path == artifact.path }) {
+                merged[existingIndex] = artifact
+            } else {
+                merged.append(artifact)
+            }
+        }
+        return merged
+    }
+
+    private func subtitleMetadataHint(
+        for jobRequest: JobRequest,
+        fallback: MediaMetadata?
+    ) -> MediaMetadata? {
+        switch jobRequest.payload {
+        case .download:
+            return nil
+        case .convert:
+            return fallback
+        case .trim(let request):
+            return MediaMetadata(
+                source: .local(request.inputURL),
+                title: request.inputURL.lastPathComponent,
+                duration: request.range.duration,
+                thumbnailURL: fallback?.thumbnailURL,
+                extractor: fallback?.extractor,
+                container: fallback?.container,
+                videoCodec: fallback?.videoCodec,
+                audioCodec: fallback?.audioCodec,
+                width: fallback?.width,
+                height: fallback?.height,
+                fileSize: fallback?.fileSize,
+                formats: []
+            )
+        case .transcribe:
+            return fallback
+        }
+    }
+
+    private func canonicalizeSubtitleArtifact(
+        _ artifact: JobArtifact,
+        mediaURL: URL,
+        overwriteExisting: Bool,
+        progressRange: ClosedRange<Double>,
+        onEvent: @escaping @Sendable (JobEvent) async -> Void
+    ) async throws -> JobArtifact {
+        let canonicalURL = try await transcodeService.normalizeSubtitleToSRT(
+            subtitleURL: artifact.url,
+            mediaURL: mediaURL,
+            overwriteExisting: overwriteExisting
+        ) { [weak self] event in
+            guard let self else { return }
+            await self.relayPipelineEvent(
+                event,
+                progressRange: progressRange,
+                destinationRelay: .ignore,
+                onEvent: onEvent
+            )
+        }
+
+        let canonicalArtifact = JobArtifact(kind: .subtitle, url: canonicalURL, isPrimary: false)
+        await onEvent(.artifact(canonicalArtifact))
+        return canonicalArtifact
+    }
+
+    private func generatePipelineSubtitles(
+        workflow: SubtitleWorkflowOptions,
+        mediaURL: URL,
+        metadata: MediaMetadata?,
+        artifacts: [JobArtifact],
+        overwriteExisting: Bool,
+        progressRange: ClosedRange<Double>,
+        onEvent: @escaping @Sendable (JobEvent) async -> Void
+    ) async throws -> ResolvedSubtitleArtifacts {
+        let requestedFormat = workflow.outputFormat.isSubtitleFormat ? workflow.outputFormat : .srt
+        let generatedOutputURL = TranscodeService.subtitleSidecarURL(for: mediaURL, outputFormat: requestedFormat)
+        let generationRange = requestedFormat == .srt ? progressRange : subrange(of: progressRange, from: 0, to: 0.82)
+
+        let transcriptionResult = try await transcriptionService.execute(
+            inputURL: mediaURL,
+            metadata: metadata,
+            outputURL: generatedOutputURL,
+            outputFormat: requestedFormat,
+            overwriteExisting: overwriteExisting
+        ) { [weak self] event in
+            guard let self else { return }
+            await self.relayPipelineEvent(
+                event,
+                progressRange: generationRange,
+                destinationRelay: .artifact(.subtitle),
+                onEvent: onEvent
+            )
+        }
+
+        var updatedArtifacts = mergedArtifacts(
+            artifacts,
+            adding: transcriptionResult.artifacts.map {
+                JobArtifact(kind: .subtitle, url: $0.url, displayName: $0.displayName, isPrimary: false)
+            }
+        )
+
+        if requestedFormat == .srt, let canonicalArtifact = updatedArtifacts.last(where: { $0.path == generatedOutputURL.path }) {
+            return ResolvedSubtitleArtifacts(artifacts: updatedArtifacts, canonicalSubtitleArtifact: canonicalArtifact)
+        }
+
+        guard let generatedArtifact = updatedArtifacts.last(where: { $0.path == generatedOutputURL.path }) else {
+            return ResolvedSubtitleArtifacts(artifacts: updatedArtifacts, canonicalSubtitleArtifact: nil)
+        }
+
+        let canonicalArtifact = try await canonicalizeSubtitleArtifact(
+            generatedArtifact,
+            mediaURL: mediaURL,
+            overwriteExisting: overwriteExisting,
+            progressRange: subrange(of: progressRange, from: 0.82, to: 1),
+            onEvent: onEvent
+        )
+        updatedArtifacts = mergedArtifacts(updatedArtifacts, adding: [canonicalArtifact])
+        return ResolvedSubtitleArtifacts(artifacts: updatedArtifacts, canonicalSubtitleArtifact: canonicalArtifact)
+    }
+
+    private func resolveSubtitleArtifacts(
+        for jobRequest: JobRequest,
+        mediaURL: URL,
+        artifacts: [JobArtifact],
+        metadata: MediaMetadata?,
+        progressRange: ClosedRange<Double>,
+        onEvent: @escaping @Sendable (JobEvent) async -> Void
+    ) async throws -> ResolvedSubtitleArtifacts {
+        switch jobRequest.payload {
+        case .download(let request):
+            if request.subtitleWorkflow.requestsSourceSubtitles,
+               let sourceArtifact = artifacts.first(where: { $0.kind == .subtitle }) {
+                let canonicalArtifact = try await canonicalizeSubtitleArtifact(
+                    sourceArtifact,
+                    mediaURL: mediaURL,
+                    overwriteExisting: request.overwriteExisting,
+                    progressRange: progressRange,
+                    onEvent: onEvent
+                )
+                return ResolvedSubtitleArtifacts(
+                    artifacts: mergedArtifacts(artifacts, adding: [canonicalArtifact]),
+                    canonicalSubtitleArtifact: canonicalArtifact
+                )
+            }
+
+            guard request.subtitleWorkflow.generatesSubtitles else {
+                return ResolvedSubtitleArtifacts(
+                    artifacts: artifacts,
+                    canonicalSubtitleArtifact: artifacts.first(where: { $0.url.pathExtension.lowercased() == "srt" })
+                )
+            }
+
+            return try await generatePipelineSubtitles(
+                workflow: request.subtitleWorkflow,
+                mediaURL: mediaURL,
+                metadata: metadata,
+                artifacts: artifacts,
+                overwriteExisting: request.overwriteExisting,
+                progressRange: progressRange,
+                onEvent: onEvent
+            )
+
+        case .convert(let request):
+            guard request.subtitleWorkflow.generatesSubtitles else {
+                return ResolvedSubtitleArtifacts(
+                    artifacts: artifacts,
+                    canonicalSubtitleArtifact: artifacts.first(where: { $0.url.pathExtension.lowercased() == "srt" })
+                )
+            }
+
+            return try await generatePipelineSubtitles(
+                workflow: request.subtitleWorkflow,
+                mediaURL: mediaURL,
+                metadata: metadata,
+                artifacts: artifacts,
+                overwriteExisting: request.overwriteExisting,
+                progressRange: progressRange,
+                onEvent: onEvent
+            )
+
+        case .trim(let request):
+            guard request.subtitleWorkflow.generatesSubtitles else {
+                return ResolvedSubtitleArtifacts(
+                    artifacts: artifacts,
+                    canonicalSubtitleArtifact: artifacts.first(where: { $0.url.pathExtension.lowercased() == "srt" })
+                )
+            }
+
+            return try await generatePipelineSubtitles(
+                workflow: request.subtitleWorkflow,
+                mediaURL: mediaURL,
+                metadata: metadata,
+                artifacts: artifacts,
+                overwriteExisting: request.overwriteExisting,
+                progressRange: progressRange,
+                onEvent: onEvent
+            )
+
+        case .transcribe:
+            return ResolvedSubtitleArtifacts(artifacts: artifacts, canonicalSubtitleArtifact: nil)
+        }
+    }
+
+    private func exportPipelineSummary(
+        mediaURL: URL,
+        canonicalSubtitleArtifact: JobArtifact?,
+        burnedCaptions: Bool
+    ) -> String {
+        guard let canonicalSubtitleArtifact else {
+            return mediaURL.lastPathComponent
+        }
+
+        if burnedCaptions {
+            return "\(mediaURL.lastPathComponent) • \(canonicalSubtitleArtifact.displayName) saved • captions burned in"
+        }
+
+        return "\(mediaURL.lastPathComponent) • \(canonicalSubtitleArtifact.displayName) saved"
+    }
+
+    private func executeExportPipeline(
+        jobRequest: JobRequest,
+        subtitleWorkflow: SubtitleWorkflowOptions,
+        preset: OutputPresetID,
+        metadata: MediaMetadata?,
+        runExport: (@escaping @Sendable (JobEvent) async -> Void) async throws -> JobResult,
+        onEvent: @escaping @Sendable (JobEvent) async -> Void
+    ) async throws -> JobResult {
+        let progressPlan = mediaPipelineProgressPlan(for: subtitleWorkflow, burnCaptions: subtitleWorkflow.burnInVideo)
+        var exportResult = try await runExport { [weak self] event in
+            guard let self else { return }
+            await self.relayPipelineEvent(
+                event,
+                progressRange: progressPlan.exportRange,
+                destinationRelay: .primaryMedia,
+                onEvent: onEvent
+            )
+        }
+
+        guard let mediaURL = exportResult.outputURL else {
+            await onEvent(.progress(1))
+            return exportResult
+        }
+
+        let resolvedArtifacts: ResolvedSubtitleArtifacts
+        if let subtitleRange = progressPlan.subtitleRange {
+            resolvedArtifacts = try await resolveSubtitleArtifacts(
+                for: jobRequest,
+                mediaURL: mediaURL,
+                artifacts: exportResult.artifacts,
+                metadata: subtitleMetadataHint(for: jobRequest, fallback: metadata),
+                progressRange: subtitleRange,
+                onEvent: onEvent
+            )
+        } else {
+            resolvedArtifacts = ResolvedSubtitleArtifacts(
+                artifacts: exportResult.artifacts,
+                canonicalSubtitleArtifact: exportResult.preferredSubtitleArtifact
+            )
+        }
+        exportResult.artifacts = resolvedArtifacts.artifacts
+
+        if subtitleWorkflow.burnInVideo {
+            guard let canonicalSubtitleArtifact = resolvedArtifacts.canonicalSubtitleArtifact else {
+                throw ProcessRunnerError.launchFailed("No subtitle file was available to burn into the exported video.")
+            }
+
+            if let burnRange = progressPlan.burnRange {
+                _ = try await transcodeService.burnSubtitles(
+                    into: mediaURL,
+                    subtitleURL: canonicalSubtitleArtifact.url,
+                    preset: preset
+                ) { [weak self] event in
+                    guard let self else { return }
+                    await self.relayPipelineEvent(
+                        event,
+                        progressRange: burnRange,
+                        destinationRelay: .ignore,
+                        onEvent: onEvent
+                    )
+                }
+            }
+        }
+
+        let summary = exportPipelineSummary(
+            mediaURL: mediaURL,
+            canonicalSubtitleArtifact: resolvedArtifacts.canonicalSubtitleArtifact,
+            burnedCaptions: subtitleWorkflow.burnInVideo
+        )
+        await onEvent(.phase(summary))
+        await onEvent(.progress(1))
+        return JobResult(artifacts: exportResult.artifacts, summary: summary)
     }
 
     private func makeTranscribeJobRequest(
@@ -811,13 +1343,40 @@ final class AppState {
     ) async throws -> JobResult {
         switch jobRequest.payload {
         case .download(let request):
-            return try await downloadService.execute(request: request, onEvent: onEvent)
+            return try await executeExportPipeline(
+                jobRequest: jobRequest,
+                subtitleWorkflow: request.subtitleWorkflow,
+                preset: request.preset,
+                metadata: downloadDraft.metadata,
+                runExport: { event in
+                    try await downloadService.execute(request: request, onEvent: event)
+                },
+                onEvent: onEvent
+            )
         case .convert(let request):
             let metadata = convertDraft.inputURL == request.inputURL ? convertDraft.metadata : nil
-            return try await transcodeService.execute(request: request, metadata: metadata, onEvent: onEvent)
+            return try await executeExportPipeline(
+                jobRequest: jobRequest,
+                subtitleWorkflow: request.subtitleWorkflow,
+                preset: request.preset,
+                metadata: metadata,
+                runExport: { event in
+                    try await transcodeService.execute(request: request, metadata: metadata, onEvent: event)
+                },
+                onEvent: onEvent
+            )
         case .trim(let request):
             let metadata = trimDraft.inputURL == request.inputURL ? trimDraft.metadata : nil
-            return try await trimService.execute(request: request, metadata: metadata, onEvent: onEvent)
+            return try await executeExportPipeline(
+                jobRequest: jobRequest,
+                subtitleWorkflow: request.subtitleWorkflow,
+                preset: request.preset,
+                metadata: metadata,
+                runExport: { event in
+                    try await trimService.execute(request: request, metadata: metadata, onEvent: event)
+                },
+                onEvent: onEvent
+            )
         case .transcribe(let request):
             let metadata = transcribeDraft.inputURL == request.inputURL ? transcribeDraft.metadata : nil
             return try await transcriptionService.execute(request: request, metadata: metadata, onEvent: onEvent)
@@ -855,7 +1414,8 @@ final class AppState {
         let arguments = ProcessInfo.processInfo.arguments
         let shouldSeedQueueHistory = arguments.contains("-uitest-seed-transcribe")
         let shouldSeedWorkspaces = arguments.contains("-uitest-seed-subtitle-workspaces")
-        guard shouldSeedQueueHistory || shouldSeedWorkspaces else { return }
+        let shouldSeedAuthProfiles = arguments.contains("-uitest-seed-auth-profiles")
+        guard shouldSeedQueueHistory || shouldSeedWorkspaces || shouldSeedAuthProfiles else { return }
 
         let fixtureRoot = FileManager.default.temporaryDirectory
             .appendingPathComponent("MediaGetterUITests", isDirectory: true)
@@ -864,7 +1424,7 @@ final class AppState {
 
         let mediaURL = fixtureRoot.appendingPathComponent("sample-output.mp4")
         let sourceSubtitleURL = fixtureRoot.appendingPathComponent("sample-output.en.vtt")
-        let transcriptURL = fixtureRoot.appendingPathComponent("sample-output-transcript.txt")
+        let savedSubtitleURL = fixtureRoot.appendingPathComponent("sample-output.srt")
 
         if !FileManager.default.fileExists(atPath: mediaURL.path) {
             try? Data("stub media".utf8).write(to: mediaURL, options: .atomic)
@@ -877,8 +1437,11 @@ final class AppState {
             )
         }
 
-        if !FileManager.default.fileExists(atPath: transcriptURL.path) {
-            try? Data("Hello from the bundled transcript preview.".utf8).write(to: transcriptURL, options: .atomic)
+        if !FileManager.default.fileExists(atPath: savedSubtitleURL.path) {
+            try? Data("1\n00:00:00,000 --> 00:00:01,000\nHello from the saved subtitle sidecar.\n".utf8).write(
+                to: savedSubtitleURL,
+                options: .atomic
+            )
         }
 
         let localMetadata = MediaMetadata(
@@ -917,6 +1480,21 @@ final class AppState {
                 )
             ]
         )
+
+        if shouldSeedAuthProfiles {
+            if authProfileStore.profiles.isEmpty {
+                _ = try? authProfileStore.saveProfile(
+                    from: DownloadAuthProfileDraft(
+                        name: "Seeded Browser Auth",
+                        strategyKind: .browser,
+                        browser: .safari,
+                        markAsDefault: true
+                    )
+                )
+            }
+
+            downloadDraft.selectedAuthProfileID = authProfileStore.defaultProfileID
+        }
 
         if shouldSeedWorkspaces {
             downloadDraft.urlString = "https://example.com/video"
@@ -969,26 +1547,8 @@ final class AppState {
                         outputFormat: .srt
                     ),
                     filenameTemplate: "%(title)s",
-                    overwriteExisting: true
-                )
-            )
-        )
-
-        let transcriptRequest = JobRequest(
-            workflowID: workflowID,
-            parentJobID: mediaRequest.id,
-            kind: .transcribe,
-            title: "Seeded Sample",
-            subtitle: "Auto subtitles (\(TranscriptionOutputFormat.txt.shortTitle))",
-            source: .local(mediaURL),
-            preset: nil,
-            transcriptionOutputFormat: .txt,
-            payload: .transcribe(
-                TranscribeRequest(
-                    inputURL: mediaURL,
-                    destinationDirectory: fixtureRoot,
-                    outputFormat: .txt,
-                    overwriteExisting: true
+                    overwriteExisting: true,
+                    resolvedAuth: nil
                 )
             )
         )
@@ -999,49 +1559,23 @@ final class AppState {
             request: mediaRequest,
             status: .completed,
             progress: 1,
-            phase: mediaURL.lastPathComponent,
-            logs: ["Download finished"],
+            phase: "\(mediaURL.lastPathComponent) • \(savedSubtitleURL.lastPathComponent) saved",
+            logs: ["Download finished", "Writing .srt subtitles"],
             artifacts: [
                 JobArtifact(kind: .media, url: mediaURL, isPrimary: true),
-                JobArtifact(kind: .subtitle, url: sourceSubtitleURL, isPrimary: false)
+                JobArtifact(kind: .subtitle, url: sourceSubtitleURL, isPrimary: false),
+                JobArtifact(kind: .subtitle, url: savedSubtitleURL, isPrimary: false)
             ],
             createdAt: now,
             startedAt: now,
             completedAt: now,
             errorMessage: nil
         )
-        let transcriptJob = JobRecord(
-            id: transcriptRequest.id,
-            request: transcriptRequest,
-            status: .completed,
-            progress: 1,
-            phase: transcriptURL.lastPathComponent,
-            logs: ["Transcription finished"],
-            artifacts: [JobArtifact(kind: .transcript, url: transcriptURL, isPrimary: true)],
-            createdAt: now,
-            startedAt: now,
-            completedAt: now,
-            errorMessage: nil
-        )
 
-        queueStore.jobs = [transcriptJob, mediaJob]
-        queueStore.selectedJobID = transcriptJob.id
+        queueStore.jobs = [mediaJob]
+        queueStore.selectedJobID = mediaJob.id
 
         historyStore.entries = [
-            HistoryEntry(
-                id: transcriptJob.id,
-                jobKind: .transcribe,
-                title: transcriptJob.request.title,
-                subtitle: transcriptJob.request.subtitle,
-                source: transcriptJob.request.source,
-                workflowID: workflowID,
-                parentJobID: mediaJob.id,
-                artifacts: transcriptJob.artifacts,
-                createdAt: now,
-                preset: nil,
-                transcriptionOutputFormat: .txt,
-                summary: transcriptJob.phase
-            ),
             HistoryEntry(
                 id: mediaJob.id,
                 jobKind: .download,

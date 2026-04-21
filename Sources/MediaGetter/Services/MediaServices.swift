@@ -65,15 +65,41 @@ final class DownloadProbeService: @unchecked Sendable {
         self.processRunner = processRunner
     }
 
-    func probe(urlString: String) async throws -> MediaMetadata {
+    func buildCommand(
+        urlString: String,
+        auth: ResolvedDownloadAuth?,
+        toolURL: URL,
+        denoURL: URL,
+        toolsDirectoryURL: URL
+    ) -> ProcessCommand {
+        var arguments = [
+            "--js-runtimes", "deno:\(denoURL.path)",
+            "-J",
+            "--no-playlist",
+            "--skip-download"
+        ]
+
+        arguments.append(contentsOf: DownloadAuthCommandBuilder.arguments(for: auth))
+        arguments.append(urlString)
+
+        return ProcessCommand(
+            executableURL: toolURL,
+            arguments: arguments,
+            environment: Self.runtimeEnvironment(toolsDirectoryURL: toolsDirectoryURL)
+        )
+    }
+
+    func probe(urlString: String, auth: ResolvedDownloadAuth? = nil) async throws -> MediaMetadata {
         let toolURL = try toolchainManager.executableURL(for: .ytDlp)
         let denoURL = try toolchainManager.executableURL(for: .deno)
         let toolsDirectoryURL = try toolchainManager.toolsDirectoryURL()
         let result = try await processRunner.run(
-            ProcessCommand(
-                executableURL: toolURL,
-                arguments: ["--js-runtimes", "deno:\(denoURL.path)", "-J", "--no-playlist", "--skip-download", urlString],
-                environment: Self.runtimeEnvironment(toolsDirectoryURL: toolsDirectoryURL)
+            buildCommand(
+                urlString: urlString,
+                auth: auth,
+                toolURL: toolURL,
+                denoURL: denoURL,
+                toolsDirectoryURL: toolsDirectoryURL
             )
         )
 
@@ -175,6 +201,8 @@ final class DownloadService: @unchecked Sendable {
         if !request.selectedFormatID.isEmpty {
             arguments.append(contentsOf: ["-f", request.selectedFormatID])
         }
+
+        arguments.append(contentsOf: DownloadAuthCommandBuilder.arguments(for: request.resolvedAuth))
 
         switch request.preset {
         case .mp4Video:
@@ -354,10 +382,16 @@ final class DownloadService: @unchecked Sendable {
 final class TranscodeService: @unchecked Sendable {
     private let toolchainManager: ToolchainManager
     private let processRunner: ProcessRunner
+    private let fileManager: FileManager
 
-    init(toolchainManager: ToolchainManager, processRunner: ProcessRunner) {
+    init(
+        toolchainManager: ToolchainManager,
+        processRunner: ProcessRunner,
+        fileManager: FileManager = .default
+    ) {
         self.toolchainManager = toolchainManager
         self.processRunner = processRunner
+        self.fileManager = fileManager
     }
 
     func inspectLocalMedia(at url: URL) async throws -> MediaMetadata {
@@ -479,6 +513,139 @@ final class TranscodeService: @unchecked Sendable {
         return JobResult(outputURL: outputURL, summary: outputURL.lastPathComponent)
     }
 
+    func buildSubtitleNormalizationCommand(
+        inputURL: URL,
+        outputURL: URL,
+        toolURL: URL
+    ) -> ProcessCommand {
+        ProcessCommand(
+            executableURL: toolURL,
+            arguments: [
+                "-hide_banner",
+                "-y",
+                "-i", inputURL.path,
+                outputURL.path
+            ]
+        )
+    }
+
+    func normalizeSubtitleToSRT(
+        subtitleURL: URL,
+        mediaURL: URL,
+        overwriteExisting: Bool,
+        onEvent: @escaping @Sendable (JobEvent) async -> Void
+    ) async throws -> URL {
+        let outputURL = Self.subtitleSidecarURL(for: mediaURL)
+        if subtitleURL.path == outputURL.path {
+            return outputURL
+        }
+
+        if fileManager.fileExists(atPath: outputURL.path) {
+            if overwriteExisting {
+                try? fileManager.removeItem(at: outputURL)
+            } else {
+                throw ProcessRunnerError.launchFailed("Subtitle file already exists at \(outputURL.path).")
+            }
+        }
+
+        await onEvent(.phase("Writing .srt subtitles"))
+        if subtitleURL.pathExtension.lowercased() == "srt" {
+            try fileManager.copyItem(at: subtitleURL, to: outputURL)
+            await onEvent(.progress(1))
+            return outputURL
+        }
+
+        let ffmpegURL = try toolchainManager.executableURL(for: .ffmpeg)
+        let command = buildSubtitleNormalizationCommand(inputURL: subtitleURL, outputURL: outputURL, toolURL: ffmpegURL)
+
+        _ = try await processRunner.run(command) { line in
+            Task { await onEvent(.log(line.text)) }
+        }
+
+        await onEvent(.progress(1))
+        return outputURL
+    }
+
+    func buildBurnedSubtitleCommand(
+        inputURL: URL,
+        subtitleURL: URL,
+        outputURL: URL,
+        preset: OutputPresetID,
+        toolURL: URL
+    ) -> ProcessCommand {
+        let videoCodec = preset.defaultVideoCodec ?? "libx264"
+        var arguments = [
+            "-hide_banner",
+            "-y",
+            "-i", inputURL.path,
+            "-map", "0:v:0",
+            "-map", "0:a?",
+            "-sn",
+            "-vf", Self.subtitleFilterArgument(for: subtitleURL),
+            "-progress", "pipe:1",
+            "-nostats",
+            "-c:v", videoCodec,
+            "-c:a", "copy"
+        ]
+
+        if preset == .mp4Video || preset == .trimClip {
+            arguments.append(contentsOf: ["-movflags", "+faststart"])
+        }
+
+        arguments.append(outputURL.path)
+        return ProcessCommand(executableURL: toolURL, arguments: arguments)
+    }
+
+    func burnSubtitles(
+        into mediaURL: URL,
+        subtitleURL: URL,
+        preset: OutputPresetID,
+        onEvent: @escaping @Sendable (JobEvent) async -> Void
+    ) async throws -> URL {
+        let ffmpegURL = try toolchainManager.executableURL(for: .ffmpeg)
+        let duration = (try? await inspectLocalMedia(at: mediaURL))?.duration ?? 0
+        let temporaryOutputURL = Self.temporaryBurnedMediaURL(for: mediaURL)
+        if fileManager.fileExists(atPath: temporaryOutputURL.path) {
+            try? fileManager.removeItem(at: temporaryOutputURL)
+        }
+
+        let command = buildBurnedSubtitleCommand(
+            inputURL: mediaURL,
+            subtitleURL: subtitleURL,
+            outputURL: temporaryOutputURL,
+            preset: preset,
+            toolURL: ffmpegURL
+        )
+
+        do {
+            _ = try await processRunner.run(command) { line in
+                Task {
+                    await onEvent(.log(line.text))
+
+                    if line.text.hasPrefix("out_time_ms="), duration > 0 {
+                        let rawValue = line.text.replacingOccurrences(of: "out_time_ms=", with: "")
+                        if let microseconds = Double(rawValue) {
+                            await onEvent(.progress(min(1, microseconds / 1_000_000 / duration)))
+                        }
+                    }
+
+                    if line.text.hasPrefix("progress=") {
+                        await onEvent(.phase("Burning captions into video"))
+                    }
+                }
+            }
+
+            _ = try fileManager.replaceItemAt(mediaURL, withItemAt: temporaryOutputURL)
+            await onEvent(.progress(1))
+            return mediaURL
+        } catch {
+            if fileManager.fileExists(atPath: temporaryOutputURL.path) {
+                try? fileManager.removeItem(at: temporaryOutputURL)
+            }
+            throw error
+        }
+    }
+
     static func outputURL(for request: ConvertRequest) -> URL {
         let fileStem = Formatters.filenameStem(for: request.inputURL)
         let suffix = request.preset.defaultFilenameSuffix
@@ -486,6 +653,37 @@ final class TranscodeService: @unchecked Sendable {
         return request.destinationDirectory
             .appendingPathComponent("\(fileStem)-\(suffix)")
             .appendingPathExtension(`extension`)
+    }
+
+    static func subtitleSidecarURL(for mediaURL: URL) -> URL {
+        mediaURL
+            .deletingPathExtension()
+            .appendingPathExtension("srt")
+    }
+
+    static func subtitleSidecarURL(
+        for mediaURL: URL,
+        outputFormat: TranscriptionOutputFormat
+    ) -> URL {
+        mediaURL
+            .deletingPathExtension()
+            .appendingPathExtension(outputFormat.fileExtension)
+    }
+
+    private static func temporaryBurnedMediaURL(for mediaURL: URL) -> URL {
+        mediaURL
+            .deletingLastPathComponent()
+            .appendingPathComponent("\(Formatters.filenameStem(for: mediaURL))-caption-burn")
+            .appendingPathExtension(mediaURL.pathExtension)
+    }
+
+    private static func subtitleFilterArgument(for subtitleURL: URL) -> String {
+        let escapedPath = subtitleURL.path
+            .replacingOccurrences(of: "\\", with: "\\\\")
+            .replacingOccurrences(of: ":", with: "\\:")
+            .replacingOccurrences(of: "'", with: "\\'")
+            .replacingOccurrences(of: ",", with: "\\,")
+        return "subtitles='\(escapedPath)'"
     }
 }
 
@@ -646,20 +844,36 @@ final class TranscriptionService: @unchecked Sendable {
         modelURL: URL
     ) -> (ProcessCommand, URL) {
         let outputURL = Self.outputURL(for: request)
+        return (
+            buildTranscriptionCommand(
+                normalizedAudioURL: normalizedAudioURL,
+                outputURL: outputURL,
+                outputFormat: request.outputFormat,
+                toolURL: toolURL,
+                modelURL: modelURL
+            ),
+            outputURL
+        )
+    }
+
+    func buildTranscriptionCommand(
+        normalizedAudioURL: URL,
+        outputURL: URL,
+        outputFormat: TranscriptionOutputFormat,
+        toolURL: URL,
+        modelURL: URL
+    ) -> ProcessCommand {
         let outputBaseURL = outputURL.deletingPathExtension()
         let arguments = [
             "-m", modelURL.path,
             "-l", "en",
             "-f", normalizedAudioURL.path,
             "-of", outputBaseURL.path,
-            request.outputFormat.whisperFlag,
+            outputFormat.whisperFlag,
             "-pp"
         ]
 
-        return (
-            ProcessCommand(executableURL: toolURL, arguments: arguments),
-            outputURL
-        )
+        return ProcessCommand(executableURL: toolURL, arguments: arguments)
     }
 
     func execute(
@@ -667,23 +881,48 @@ final class TranscriptionService: @unchecked Sendable {
         metadata: MediaMetadata?,
         onEvent: @escaping @Sendable (JobEvent) async -> Void
     ) async throws -> JobResult {
+        try await execute(
+            inputURL: request.inputURL,
+            metadata: metadata,
+            outputURL: Self.outputURL(for: request),
+            outputFormat: request.outputFormat,
+            overwriteExisting: request.overwriteExisting,
+            onEvent: onEvent
+        )
+    }
+
+    func execute(
+        inputURL: URL,
+        metadata: MediaMetadata?,
+        outputURL: URL,
+        outputFormat: TranscriptionOutputFormat,
+        overwriteExisting: Bool,
+        onEvent: @escaping @Sendable (JobEvent) async -> Void
+    ) async throws -> JobResult {
         let ffmpegURL = try toolchainManager.executableURL(for: .ffmpeg)
         let whisperURL = try toolchainManager.executableURL(for: .whisperCLI)
         let modelURL = try toolchainManager.assetURL(for: .whisperBaseEnglishModel)
         _ = toolchainManager.optionalAssetURL(for: .whisperBaseEnglishCoreML)
 
-        let outputURL = Self.outputURL(for: request)
-        let tempAudioURL = Self.temporaryAudioURL(for: request, in: temporaryDirectory)
+        let request = TranscribeRequest(
+            inputURL: inputURL,
+            destinationDirectory: outputURL.deletingLastPathComponent(),
+            outputFormat: outputFormat,
+            overwriteExisting: overwriteExisting
+        )
+        let tempAudioURL = Self.temporaryAudioURL(for: inputURL, in: temporaryDirectory)
+        let isSubtitleOutput = outputFormat.isSubtitleFormat
+        let outputLabel = isSubtitleOutput ? "Subtitle file" : "Transcript"
 
         if fileManager.fileExists(atPath: outputURL.path) {
-            if request.overwriteExisting {
+            if overwriteExisting {
                 try? fileManager.removeItem(at: outputURL)
             } else {
-                throw ProcessRunnerError.launchFailed("Transcript already exists at \(outputURL.path).")
+                throw ProcessRunnerError.launchFailed("\(outputLabel) already exists at \(outputURL.path).")
             }
         }
 
-        try? fileManager.createDirectory(at: request.destinationDirectory, withIntermediateDirectories: true)
+        try? fileManager.createDirectory(at: outputURL.deletingLastPathComponent(), withIntermediateDirectories: true)
         try? fileManager.createDirectory(at: temporaryDirectory, withIntermediateDirectories: true)
 
         var shouldRemoveOutputOnFailure = false
@@ -692,7 +931,7 @@ final class TranscriptionService: @unchecked Sendable {
         }
 
         do {
-            await onEvent(.phase("Preparing audio"))
+            await onEvent(.phase(isSubtitleOutput ? "Preparing subtitles" : "Preparing audio"))
             let (extractionCommand, normalizedAudioURL) = buildExtractionCommand(for: request, metadata: metadata, toolURL: ffmpegURL)
 
             await onEvent(.phase("Extracting audio"))
@@ -712,15 +951,16 @@ final class TranscriptionService: @unchecked Sendable {
 
             try Task.checkCancellation()
 
-            let (transcriptionCommand, transcriptURL) = buildTranscriptionCommand(
-                for: request,
+            let transcriptionCommand = buildTranscriptionCommand(
                 normalizedAudioURL: normalizedAudioURL,
+                outputURL: outputURL,
+                outputFormat: outputFormat,
                 toolURL: whisperURL,
                 modelURL: modelURL
             )
 
             shouldRemoveOutputOnFailure = true
-            await onEvent(.phase("Transcribing"))
+            await onEvent(.phase(isSubtitleOutput ? "Generating subtitles" : "Transcribing"))
             _ = try await processRunner.run(transcriptionCommand) { line in
                 Task {
                     await onEvent(.log(line.text))
@@ -732,13 +972,13 @@ final class TranscriptionService: @unchecked Sendable {
                 }
             }
 
-            await onEvent(.phase("Writing transcript"))
+            await onEvent(.phase(isSubtitleOutput ? "Writing subtitles" : "Writing transcript"))
             await onEvent(.progress(1))
-            await onEvent(.destination(transcriptURL))
+            await onEvent(.destination(outputURL))
             return JobResult(
-                outputURL: transcriptURL,
-                summary: transcriptURL.lastPathComponent,
-                artifactKind: request.outputFormat.artifactKind
+                outputURL: outputURL,
+                summary: outputURL.lastPathComponent,
+                artifactKind: outputFormat.artifactKind
             )
         } catch {
             if shouldRemoveOutputOnFailure, fileManager.fileExists(atPath: outputURL.path) {
@@ -750,14 +990,31 @@ final class TranscriptionService: @unchecked Sendable {
     }
 
     static func outputURL(for request: TranscribeRequest) -> URL {
-        let fileStem = Formatters.filenameStem(for: request.inputURL)
-        return request.destinationDirectory
-            .appendingPathComponent("\(fileStem)-transcript")
-            .appendingPathExtension(request.outputFormat.fileExtension)
+        outputURL(
+            for: request.inputURL,
+            destinationDirectory: request.destinationDirectory,
+            outputFormat: request.outputFormat
+        )
+    }
+
+    static func outputURL(
+        for inputURL: URL,
+        destinationDirectory: URL,
+        outputFormat: TranscriptionOutputFormat,
+        outputStem: String? = nil
+    ) -> URL {
+        let resolvedStem = outputStem ?? "\(Formatters.filenameStem(for: inputURL))-transcript"
+        return destinationDirectory
+            .appendingPathComponent(resolvedStem)
+            .appendingPathExtension(outputFormat.fileExtension)
     }
 
     static func temporaryAudioURL(for request: TranscribeRequest, in temporaryDirectory: URL) -> URL {
-        let fileStem = Formatters.filenameStem(for: request.inputURL)
+        temporaryAudioURL(for: request.inputURL, in: temporaryDirectory)
+    }
+
+    static func temporaryAudioURL(for inputURL: URL, in temporaryDirectory: URL) -> URL {
+        let fileStem = Formatters.filenameStem(for: inputURL)
         return temporaryDirectory
             .appendingPathComponent("\(fileStem)-transcription-source")
             .appendingPathExtension("wav")

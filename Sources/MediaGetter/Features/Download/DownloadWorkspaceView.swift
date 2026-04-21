@@ -3,6 +3,7 @@ import UniformTypeIdentifiers
 
 struct DownloadWorkspaceView: View {
     @Bindable var appState: AppState
+    @State private var isAuthSheetPresented = false
 
     var body: some View {
         ScrollView {
@@ -19,6 +20,26 @@ struct DownloadWorkspaceView: View {
                     TextField("https://example.com/video", text: $appState.downloadDraft.urlString)
                         .textFieldStyle(.roundedBorder)
                         .accessibilityIdentifier(AccessibilityID.downloadURLField)
+
+                    Picker("Authentication", selection: $appState.downloadDraft.selectedAuthProfileID) {
+                        Text("No auth")
+                            .tag(UUID?.none)
+
+                        ForEach(appState.authProfileStore.profiles) { profile in
+                            Text(profile.name)
+                                .tag(Optional(profile.id))
+                        }
+                    }
+                    .accessibilityIdentifier(AccessibilityID.downloadAuthPicker)
+
+                    VStack(alignment: .leading, spacing: 6) {
+                        Text(appState.downloadAuthSummary())
+                            .font(.subheadline.weight(.semibold))
+                            .accessibilityIdentifier(AccessibilityID.downloadAuthSummary)
+                        Text(appState.downloadAuthDetail())
+                            .foregroundStyle(.secondary)
+                    }
+                    .accessibilityElement(children: .combine)
 
                     HStack {
                         Button("Paste URL") {
@@ -37,6 +58,11 @@ struct DownloadWorkspaceView: View {
                             appState.inspectorMode = .metadata
                         }
                         .disabled(appState.downloadDraft.metadata == nil)
+
+                        Button("Configure Auth…") {
+                            isAuthSheetPresented = true
+                        }
+                        .accessibilityIdentifier(AccessibilityID.downloadConfigureAuthButton)
                     }
                 }
                 .onDrop(of: [UTType.url.identifier, UTType.fileURL.identifier, UTType.text.identifier], isTargeted: nil) { providers in
@@ -48,6 +74,13 @@ struct DownloadWorkspaceView: View {
                         onText: { string in
                             appState.downloadDraft.urlString = string
                         }
+                    )
+                }
+                .sheet(isPresented: $isAuthSheetPresented) {
+                    DownloadAuthProfileSheet(
+                        appState: appState,
+                        context: .download,
+                        initialProfileID: appState.downloadDraft.selectedAuthProfileID
                     )
                 }
 
@@ -104,6 +137,7 @@ struct DownloadWorkspaceView: View {
                         }
                         .disabled(
                             appState.downloadDraft.subtitleWorkflow.needsLocalRuntime && !appState.isTranscriptionReady
+                                || (appState.downloadDraft.subtitleWorkflow.burnInVideo && appState.downloadDraft.selectedPreset.audioOnly)
                         )
                         .accessibilityIdentifier(AccessibilityID.downloadQueueButton)
                     }
@@ -124,11 +158,23 @@ struct DownloadWorkspaceView: View {
 
                         if appState.downloadDraft.subtitleWorkflow.showsOutputFormatPicker {
                             Picker("Generated output", selection: $appState.downloadDraft.subtitleWorkflow.outputFormat) {
-                                ForEach(TranscriptionOutputFormat.allCases) { format in
+                                ForEach(TranscriptionOutputFormat.subtitleFormats) { format in
                                     Text(format.title).tag(format)
                                 }
                             }
                             .accessibilityIdentifier(AccessibilityID.downloadSubtitleFormatPicker)
+                        }
+
+                        if appState.downloadDraft.subtitleWorkflow.isEnabled {
+                            Toggle(
+                                "Burn captions into exported video",
+                                isOn: $appState.downloadDraft.subtitleWorkflow.burnInVideo
+                            )
+
+                            if appState.downloadDraft.selectedPreset.audioOnly {
+                                Text("Caption burn-in only applies to video presets.")
+                                    .foregroundStyle(.secondary)
+                            }
                         }
 
                         if appState.downloadDraft.subtitleWorkflow.needsLocalRuntime {

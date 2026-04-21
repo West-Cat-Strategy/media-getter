@@ -26,6 +26,8 @@ cat >"$APP_PATH/Contents/Info.plist" <<'EOF'
   <string>0.2.0</string>
   <key>CFBundleVersion</key>
   <string>0.2.0</string>
+  <key>LSMinimumSystemVersion</key>
+  <string>14.0.0</string>
 </dict>
 </plist>
 EOF
@@ -61,6 +63,7 @@ TAG_NAME="v0.2.0" \
 RELEASE_NOTES_FILE="$RELEASE_NOTES_FILE" \
 DOWNLOAD_URL="https://example.com/MediaGetter.zip" \
 RELEASE_URL="https://github.com/West-Cat-Strategy/media-getter/releases/tag/v0.2.0" \
+HARDWARE_REQUIREMENTS="arm64" \
 "$ROOT_DIR/script/generate_sparkle_appcast.sh"
 
 [[ -f "$ZIP_PATH" ]]
@@ -69,9 +72,12 @@ RELEASE_URL="https://github.com/West-Cat-Strategy/media-getter/releases/tag/v0.2
 grep -q "<title>Version 0.2.0</title>" "$APPCAST_PATH"
 grep -q "<sparkle:version>0.2.0</sparkle:version>" "$APPCAST_PATH"
 grep -q "<sparkle:shortVersionString>0.2.0</sparkle:shortVersionString>" "$APPCAST_PATH"
+grep -q "<sparkle:minimumSystemVersion>14.0.0</sparkle:minimumSystemVersion>" "$APPCAST_PATH"
+grep -q "<sparkle:hardwareRequirements>arm64</sparkle:hardwareRequirements>" "$APPCAST_PATH"
 grep -q 'https://example.com/MediaGetter.zip' "$APPCAST_PATH"
 grep -q 'TEST_ARCHIVE_SIGNATURE' "$APPCAST_PATH"
 grep -q 'TEST_FEED_SIGNATURE' "$APPCAST_PATH"
+grep -q 'sparkle:os="macos"' "$APPCAST_PATH"
 grep -q 'Smoke test release notes' "$APPCAST_PATH"
 
 echo "Appcast smoke test passed."

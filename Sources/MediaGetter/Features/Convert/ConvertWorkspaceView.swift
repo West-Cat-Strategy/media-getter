@@ -99,9 +99,19 @@ struct ConvertWorkspaceView: View {
 
                     if appState.convertDraft.subtitleWorkflow.generatesSubtitles {
                         Picker("Generated output", selection: $appState.convertDraft.subtitleWorkflow.outputFormat) {
-                            ForEach(TranscriptionOutputFormat.allCases) { format in
+                            ForEach(TranscriptionOutputFormat.subtitleFormats) { format in
                                 Text(format.title).tag(format)
                             }
+                        }
+
+                        Toggle(
+                            "Burn captions into exported video",
+                            isOn: $appState.convertDraft.subtitleWorkflow.burnInVideo
+                        )
+
+                        if appState.convertDraft.selectedPreset.audioOnly {
+                            Text("Caption burn-in only applies to video presets.")
+                                .foregroundStyle(.secondary)
                         }
 
                         Label(
@@ -120,6 +130,7 @@ struct ConvertWorkspaceView: View {
                     .disabled(
                         appState.convertDraft.inputURL == nil
                             || (appState.convertDraft.subtitleWorkflow.needsLocalRuntime && !appState.isTranscriptionReady)
+                            || (appState.convertDraft.subtitleWorkflow.burnInVideo && appState.convertDraft.selectedPreset.audioOnly)
                     )
                     .accessibilityIdentifier(AccessibilityID.convertQueueButton)
                 }

@@ -20,7 +20,7 @@ struct MediaGetterApp: App {
 
         Settings {
             SettingsView(appState: appState, appUpdateManager: appUpdateManager)
-                .frame(width: 560, height: 520)
+                .frame(width: 620, height: 640)
                 .padding()
         }
     }

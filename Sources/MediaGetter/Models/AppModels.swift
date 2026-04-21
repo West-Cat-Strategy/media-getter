@@ -229,6 +229,10 @@ enum TranscriptionOutputFormat: String, Codable, CaseIterable, Identifiable {
     case srt
     case vtt
 
+    static var subtitleFormats: [TranscriptionOutputFormat] {
+        [.srt, .vtt]
+    }
+
     var id: Self { self }
 
     var title: String {
@@ -258,6 +262,10 @@ enum TranscriptionOutputFormat: String, Codable, CaseIterable, Identifiable {
         case .srt, .vtt:
             .subtitle
         }
+    }
+
+    var isSubtitleFormat: Bool {
+        artifactKind == .subtitle
     }
 
     var whisperFlag: String {
@@ -328,6 +336,7 @@ enum SubtitleSourcePolicy: String, Codable, CaseIterable, Identifiable {
 struct SubtitleWorkflowOptions: Codable, Equatable {
     var sourcePolicy: SubtitleSourcePolicy
     var outputFormat: TranscriptionOutputFormat
+    var burnInVideo: Bool = false
 
     static func off(format: TranscriptionOutputFormat) -> SubtitleWorkflowOptions {
         SubtitleWorkflowOptions(sourcePolicy: .off, outputFormat: format)
@@ -347,6 +356,10 @@ struct SubtitleWorkflowOptions: Codable, Equatable {
 
     var needsLocalRuntime: Bool {
         generatesSubtitles
+    }
+
+    var needsSubtitleArtifacts: Bool {
+        requestsSourceSubtitles || generatesSubtitles
     }
 
     var showsOutputFormatPicker: Bool {
@@ -670,6 +683,7 @@ struct DownloadRequest: Equatable {
     var subtitleWorkflow: SubtitleWorkflowOptions
     var filenameTemplate: String
     var overwriteExisting: Bool
+    var resolvedAuth: ResolvedDownloadAuth?
 }
 
 struct ConvertRequest: Equatable {
@@ -778,6 +792,10 @@ struct JobRecord: Identifiable, Equatable {
         artifacts.filter(\.isSubtitleArtifact)
     }
 
+    var preferredSubtitleArtifact: JobArtifact? {
+        subtitleArtifacts.first(where: { $0.url.pathExtension.lowercased() == "srt" }) ?? subtitleArtifacts.first
+    }
+
     private static func resolvedArtifacts(outputURL: URL?, artifacts: [JobArtifact], request: JobRequest) -> [JobArtifact] {
         guard artifacts.isEmpty, let outputURL else { return artifacts }
         return [
@@ -860,6 +878,10 @@ struct HistoryEntry: Codable, Equatable, Identifiable {
 
     var subtitleArtifacts: [JobArtifact] {
         artifacts.filter(\.isSubtitleArtifact)
+    }
+
+    var preferredSubtitleArtifact: JobArtifact? {
+        subtitleArtifacts.first(where: { $0.url.pathExtension.lowercased() == "srt" }) ?? subtitleArtifacts.first
     }
 
     var isAutoSubtitleJob: Bool {
@@ -978,6 +1000,7 @@ enum JobEvent: Equatable {
     case progress(Double)
     case log(String)
     case destination(URL)
+    case artifact(JobArtifact)
 }
 
 struct JobResult: Equatable {
@@ -1009,6 +1032,10 @@ struct JobResult: Equatable {
     var subtitleArtifacts: [JobArtifact] {
         artifacts.filter(\.isSubtitleArtifact)
     }
+
+    var preferredSubtitleArtifact: JobArtifact? {
+        subtitleArtifacts.first(where: { $0.url.pathExtension.lowercased() == "srt" }) ?? subtitleArtifacts.first
+    }
 }
 
 struct DownloadDraft: Equatable {
@@ -1018,6 +1045,7 @@ struct DownloadDraft: Equatable {
     var destinationDirectoryPath: String = ""
     var subtitleWorkflow: SubtitleWorkflowOptions = .off(format: .srt)
     var filenameTemplate: String = "%(title)s"
+    var selectedAuthProfileID: UUID?
     var metadata: MediaMetadata?
     var isProbing: Bool = false
 }

@@ -35,6 +35,8 @@ struct HistoryWorkspaceView: View {
                                     Text(entry.createdAt.formatted(date: .abbreviated, time: .shortened))
                                         .font(.caption)
                                         .foregroundStyle(.secondary)
+                                    Text(entry.summary)
+                                        .font(.subheadline)
 
                                     if let outputPath = entry.outputPath {
                                         Text(outputPath)

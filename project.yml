@@ -159,6 +159,7 @@ targets:
       base:
         PRODUCT_NAME: MediaGetterTests
         PRODUCT_BUNDLE_IDENTIFIER: com.bryan.mediagetter.tests
+        GENERATE_INFOPLIST_FILE: true
   MediaGetterUITests:
     type: bundle.ui-testing
     platform: macOS
@@ -171,6 +172,7 @@ targets:
       base:
         PRODUCT_NAME: MediaGetterUITests
         PRODUCT_BUNDLE_IDENTIFIER: com.bryan.mediagetter.uitests
+        GENERATE_INFOPLIST_FILE: true
 schemes:
   MediaGetter:
     build:

@@ -125,6 +125,12 @@ final class QueueStore {
             } else {
                 jobs[index].artifacts.append(JobArtifact(kind: .media, url: url, isPrimary: true))
             }
+        case .artifact(let artifact):
+            if let existingArtifactIndex = jobs[index].artifacts.firstIndex(where: { $0.path == artifact.path }) {
+                jobs[index].artifacts[existingArtifactIndex] = artifact
+            } else {
+                jobs[index].artifacts.append(artifact)
+            }
         }
     }
 

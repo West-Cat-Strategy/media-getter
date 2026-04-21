@@ -3,9 +3,15 @@ import XCTest
 @MainActor
 final class MediaGetterUITests: XCTestCase {
     private enum IDs {
+        static let downloadAuthPicker = "download-auth-picker"
+        static let downloadConfigureAuthButton = "download-configure-auth-button"
+        static let downloadAuthSummary = "download-auth-summary"
         static let downloadURLField = "download-url-field"
         static let downloadInspectButton = "download-inspect-button"
         static let downloadSubtitlePolicyPicker = "download-subtitle-policy-picker"
+        static let authSheetProfilePicker = "auth-sheet-profile-picker"
+        static let authSheetStepPicker = "auth-sheet-step-picker"
+        static let authSheetStrategyPicker = "auth-sheet-strategy-picker"
         static let convertSubtitleToggle = "convert-subtitle-toggle"
         static let trimSubtitleToggle = "trim-subtitle-toggle"
         static let sidebarConvert = "sidebar-convert"
@@ -16,7 +22,7 @@ final class MediaGetterUITests: XCTestCase {
     }
 
     func testPrimaryToolbarButtonsAppear() {
-        let app = XCUIApplication()
+        let app = makeApp()
         app.launch()
 
         let pasteURL = app.buttons["Paste URL"].waitForExistence(timeout: 5)
@@ -33,7 +39,7 @@ final class MediaGetterUITests: XCTestCase {
     }
 
     func testDownloadWorkspaceShowsPrimaryControls() {
-        let app = XCUIApplication()
+        let app = makeApp()
         app.launch()
 
         let urlFieldExists = app.textFields[IDs.downloadURLField].waitForExistence(timeout: 5)
@@ -44,7 +50,7 @@ final class MediaGetterUITests: XCTestCase {
     }
 
     func testTranscribeWorkspaceShowsPrimaryControlsAndDefaultFormat() {
-        let app = XCUIApplication()
+        let app = makeApp()
         app.launchArguments.append("-uitest-open-transcribe")
         app.launch()
 
@@ -56,7 +62,7 @@ final class MediaGetterUITests: XCTestCase {
     }
 
     func testDownloadSubtitleControlsAppearWhenWorkspaceIsSeeded() {
-        let app = XCUIApplication()
+        let app = makeApp()
         app.launchArguments.append("-uitest-seed-subtitle-workspaces")
         app.launch()
 
@@ -64,7 +70,7 @@ final class MediaGetterUITests: XCTestCase {
     }
 
     func testConvertSubtitleControlsAppearWhenWorkspaceIsSeeded() {
-        let app = XCUIApplication()
+        let app = makeApp()
         app.launchArguments.append(contentsOf: ["-uitest-seed-subtitle-workspaces", "-uitest-open-convert"])
         app.launch()
 
@@ -72,7 +78,7 @@ final class MediaGetterUITests: XCTestCase {
     }
 
     func testTrimSubtitleControlsAppearWhenWorkspaceIsSeeded() {
-        let app = XCUIApplication()
+        let app = makeApp()
         app.launchArguments.append("-uitest-open-trim")
         app.launch()
 
@@ -80,20 +86,74 @@ final class MediaGetterUITests: XCTestCase {
     }
 
     func testQueueAndHistoryExposeSubtitleArtifactAffordances() {
-        let queueApp = XCUIApplication()
+        let queueApp = makeApp()
         queueApp.launchArguments.append(contentsOf: ["-uitest-seed-transcribe", "-uitest-open-queue"])
         queueApp.launch()
 
         XCTAssertTrue(queueApp.buttons["Preview"].waitForExistence(timeout: 5))
         XCTAssertTrue(queueApp.buttons["Transcribe"].exists)
-        XCTAssertTrue(queueApp.staticTexts["Linked auto-subtitle job"].exists)
+        XCTAssertTrue(queueApp.staticTexts["sample-output.mp4 • sample-output.srt saved"].exists)
         queueApp.terminate()
 
-        let historyApp = XCUIApplication()
+        let historyApp = makeApp()
         historyApp.launchArguments.append(contentsOf: ["-uitest-seed-transcribe", "-uitest-open-history"])
         historyApp.launch()
 
         XCTAssertTrue(historyApp.buttons["Preview"].waitForExistence(timeout: 5))
         XCTAssertTrue(historyApp.buttons["Transcribe"].exists)
+        XCTAssertTrue(historyApp.staticTexts["sample-output.mp4 • sample-output.srt saved"].exists)
+    }
+
+    func testDownloadAuthControlsAppear() {
+        let app = makeApp()
+        app.launch()
+
+        XCTAssertTrue(app.popUpButtons[IDs.downloadAuthPicker].waitForExistence(timeout: 5))
+        XCTAssertTrue(app.buttons[IDs.downloadConfigureAuthButton].exists)
+        XCTAssertTrue(app.staticTexts[IDs.downloadAuthSummary].exists)
+    }
+
+    func testDownloadAuthSheetOpensFromDownload() {
+        let app = makeApp()
+        app.launch()
+
+        app.buttons[IDs.downloadConfigureAuthButton].click()
+
+        XCTAssertTrue(app.popUpButtons[IDs.authSheetProfilePicker].waitForExistence(timeout: 5))
+        XCTAssertTrue(app.buttons["Details"].exists)
+    }
+
+    func testDownloadAuthSheetCanSwitchStrategyAndSteps() {
+        let app = makeApp()
+        app.launch()
+
+        app.buttons[IDs.downloadConfigureAuthButton].click()
+
+        let strategyPicker = app.popUpButtons[IDs.authSheetStrategyPicker]
+        XCTAssertTrue(strategyPicker.waitForExistence(timeout: 5))
+        strategyPicker.click()
+        app.menuItems["Advanced Headers"].click()
+
+        XCTAssertEqual(strategyPicker.value as? String, "Advanced Headers")
+        app.buttons["Details"].click()
+        XCTAssertTrue(app.staticTexts["Cookie header"].waitForExistence(timeout: 5))
+        app.buttons["Finish"].click()
+        XCTAssertTrue(app.staticTexts["Summary"].waitForExistence(timeout: 5))
+    }
+
+    func testDownloadAuthSeededProfileIsSelectedByDefault() {
+        let app = makeApp()
+        app.launchArguments.append("-uitest-seed-auth-profiles")
+        app.launch()
+
+        let authPicker = app.popUpButtons[IDs.downloadAuthPicker]
+        XCTAssertTrue(authPicker.waitForExistence(timeout: 5))
+        XCTAssertEqual(authPicker.value as? String, "Seeded Browser Auth")
+    }
+
+    private func makeApp() -> XCUIApplication {
+        let app = XCUIApplication()
+        app.launchArguments.append("-uitest-isolated-auth-store")
+        return app
     }
 }

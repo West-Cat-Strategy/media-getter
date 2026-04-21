@@ -7,7 +7,10 @@ MediaGetter uses Sparkle 2 with GitHub Releases as the update backend.
 - The appcast feed is fixed to `https://github.com/West-Cat-Strategy/media-getter/releases/latest/download/appcast.xml`.
 - Automatic update checks are enabled by default.
 - Background download and install is enabled by default when Sparkle is allowed to do so.
+- The app now surfaces update precheck, download, extraction, ready-to-install, and failure states directly in Settings.
+- Manual checks open Settings, preflight the GitHub release feed, and defer the install permission prompt until the verified update is ready.
 - Signed feeds are required, which means `SUVerifyUpdateBeforeExtraction` and `SURequireSignedFeed` must stay enabled together.
+- Appcast items should carry the release's `sparkle:minimumSystemVersion`, `sparkle:hardwareRequirements`, and `sparkle:os="macos"` metadata so Sparkle only selects compatible macOS assets.
 
 ## Release automation
 

@@ -29,6 +29,16 @@ enum FileHelpers {
     }
 
     @MainActor
+    static func chooseCookieFile(startingAt startURL: URL?) -> URL? {
+        let panel = NSOpenPanel()
+        panel.canChooseDirectories = false
+        panel.canChooseFiles = true
+        panel.allowsMultipleSelection = false
+        panel.directoryURL = startURL
+        return panel.runModal() == .OK ? panel.url : nil
+    }
+
+    @MainActor
     static func reveal(_ url: URL?) {
         guard let url else { return }
         NSWorkspace.shared.activateFileViewerSelecting([url])

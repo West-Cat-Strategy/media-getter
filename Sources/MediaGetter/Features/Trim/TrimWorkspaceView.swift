@@ -73,10 +73,15 @@ struct TrimWorkspaceView: View {
 
                     if appState.trimDraft.subtitleWorkflow.generatesSubtitles {
                         Picker("Generated output", selection: $appState.trimDraft.subtitleWorkflow.outputFormat) {
-                            ForEach(TranscriptionOutputFormat.allCases) { format in
+                            ForEach(TranscriptionOutputFormat.subtitleFormats) { format in
                                 Text(format.title).tag(format)
                             }
                         }
+
+                        Toggle(
+                            "Burn captions into exported video",
+                            isOn: $appState.trimDraft.subtitleWorkflow.burnInVideo
+                        )
 
                         Label(
                             appState.transcriptionRuntimeSummary,
