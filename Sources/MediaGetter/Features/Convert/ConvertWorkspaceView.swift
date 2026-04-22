@@ -29,12 +29,14 @@ struct ConvertWorkspaceView: View {
                         Button("Open File") {
                             appState.openMediaFileForCurrentSection()
                         }
+                        .buttonStyle(InteractiveButtonStyle())
                         .accessibilityIdentifier(AccessibilityID.convertOpenButton)
 
                         if appState.convertDraft.inputURL != nil {
                             Button("Show Metadata") {
                                 appState.inspectorMode = .metadata
                             }
+                            .buttonStyle(InteractiveButtonStyle())
                         }
                     }
                 }
@@ -132,6 +134,7 @@ struct ConvertWorkspaceView: View {
                             || (appState.convertDraft.subtitleWorkflow.needsLocalRuntime && !appState.isTranscriptionReady)
                             || (appState.convertDraft.subtitleWorkflow.burnInVideo && appState.convertDraft.selectedPreset.audioOnly)
                     )
+                    .buttonStyle(InteractiveButtonStyle())
                     .accessibilityIdentifier(AccessibilityID.convertQueueButton)
                 }
             }

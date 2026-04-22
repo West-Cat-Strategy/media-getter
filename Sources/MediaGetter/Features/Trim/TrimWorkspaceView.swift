@@ -30,6 +30,7 @@ struct TrimWorkspaceView: View {
                         appState.selectedSection = .trim
                         appState.openMediaFileForCurrentSection()
                     }
+                    .buttonStyle(InteractiveButtonStyle())
                     .accessibilityIdentifier(AccessibilityID.trimOpenButton)
                 }
                 .onDrop(of: [UTType.fileURL.identifier], isTargeted: nil) { providers in
@@ -112,6 +113,7 @@ struct TrimWorkspaceView: View {
                         appState.trimDraft.inputURL == nil
                             || (appState.trimDraft.subtitleWorkflow.needsLocalRuntime && !appState.isTranscriptionReady)
                     )
+                    .buttonStyle(InteractiveButtonStyle())
                     .accessibilityIdentifier(AccessibilityID.trimQueueButton)
                 }
 

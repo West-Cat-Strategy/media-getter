@@ -1,13 +1,37 @@
 import SwiftUI
 
+// MARK: - Button Styles
+
+struct InteractiveButtonStyle: ButtonStyle {
+    @State private var isHovering = false
+
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label
+            .opacity(isHovering || configuration.isPressed ? 0.8 : 1.0)
+            .scaleEffect(isHovering || configuration.isPressed ? 0.97 : 1.0)
+            .brightness(isHovering ? 0.08 : 0)
+            .animation(.easeInOut(duration: 0.15), value: isHovering)
+            .animation(.easeInOut(duration: 0.1), value: configuration.isPressed)
+            .onHover { hovering in
+                isHovering = hovering
+            }
+    }
+}
+
+// MARK: - Components
+
 struct WorkspaceHeader: View {
     let title: String
     let subtitle: String
 
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
+            Text("Workspace")
+                .font(.system(.caption, design: .monospaced).weight(.semibold))
+                .foregroundStyle(.secondary)
+                .textCase(.uppercase)
             Text(title)
-                .font(.largeTitle.weight(.semibold))
+                .font(.system(size: 30, weight: .semibold, design: .rounded))
             Text(subtitle)
                 .foregroundStyle(.secondary)
         }
@@ -24,12 +48,13 @@ struct StudioCard<Content: View>: View {
         .padding(20)
         .background(
             RoundedRectangle(cornerRadius: 18, style: .continuous)
-                .fill(.regularMaterial)
+                .fill(Color(red: 0.14, green: 0.15, blue: 0.18).opacity(0.94))
         )
         .overlay(
             RoundedRectangle(cornerRadius: 18, style: .continuous)
-                .strokeBorder(.quaternary, lineWidth: 1)
+                .strokeBorder(Color.white.opacity(0.09), lineWidth: 1)
         )
+        .shadow(color: .black.opacity(0.16), radius: 18, y: 10)
     }
 }
 
@@ -55,14 +80,14 @@ struct PresetTile: View {
             .padding(16)
             .background(
                 RoundedRectangle(cornerRadius: 16, style: .continuous)
-                    .fill(isSelected ? Color.accentColor.opacity(0.16) : Color.secondary.opacity(0.08))
+                    .fill(isSelected ? Color.accentColor.opacity(0.22) : Color.white.opacity(0.05))
             )
             .overlay(
                 RoundedRectangle(cornerRadius: 16, style: .continuous)
-                    .stroke(isSelected ? Color.accentColor : Color.clear, lineWidth: 1.5)
+                    .stroke(isSelected ? Color.accentColor : Color.white.opacity(0.06), lineWidth: 1.5)
             )
         }
-        .buttonStyle(.plain)
+        .buttonStyle(InteractiveButtonStyle())
     }
 }
 
@@ -151,6 +176,7 @@ struct PathPickerRow: View {
             Button("Choose") {
                 action()
             }
+            .buttonStyle(InteractiveButtonStyle())
         }
     }
 }
@@ -177,14 +203,17 @@ struct SubtitleArtifactSection: View {
                             Button("Preview") {
                                 onPreview(artifact)
                             }
+                            .buttonStyle(InteractiveButtonStyle())
 
                             Button("Open") {
                                 onOpen(artifact)
                             }
+                            .buttonStyle(InteractiveButtonStyle())
 
                             Button("Reveal") {
                                 onReveal(artifact)
                             }
+                            .buttonStyle(InteractiveButtonStyle())
                         }
                     }
                 }
@@ -203,7 +232,7 @@ struct StatusBadge: View {
             .padding(.vertical, 4)
             .background(
                 Capsule()
-                    .fill(Color(nsColor: status.tint).opacity(0.15))
+                    .fill(Color(nsColor: status.tint).opacity(0.18))
             )
             .foregroundStyle(Color(nsColor: status.tint))
     }

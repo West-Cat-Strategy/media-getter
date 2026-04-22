@@ -45,11 +45,13 @@ struct DownloadWorkspaceView: View {
                         Button("Paste URL") {
                             appState.pasteURLFromClipboard()
                         }
+                        .buttonStyle(InteractiveButtonStyle())
 
                         Button(appState.downloadDraft.isProbing ? "Inspecting…" : "Inspect URL") {
                             Task { await appState.probeDownloadURL() }
                         }
                         .disabled(appState.downloadDraft.isProbing)
+                        .buttonStyle(InteractiveButtonStyle())
                         .accessibilityIdentifier(AccessibilityID.downloadInspectButton)
 
                         Spacer()
@@ -58,10 +60,12 @@ struct DownloadWorkspaceView: View {
                             appState.inspectorMode = .metadata
                         }
                         .disabled(appState.downloadDraft.metadata == nil)
+                        .buttonStyle(InteractiveButtonStyle())
 
                         Button("Configure Auth…") {
                             isAuthSheetPresented = true
                         }
+                        .buttonStyle(InteractiveButtonStyle())
                         .accessibilityIdentifier(AccessibilityID.downloadConfigureAuthButton)
                     }
                 }
@@ -139,6 +143,7 @@ struct DownloadWorkspaceView: View {
                             appState.downloadDraft.subtitleWorkflow.needsLocalRuntime && !appState.isTranscriptionReady
                                 || (appState.downloadDraft.subtitleWorkflow.burnInVideo && appState.downloadDraft.selectedPreset.audioOnly)
                         )
+                        .buttonStyle(InteractiveButtonStyle())
                         .accessibilityIdentifier(AccessibilityID.downloadQueueButton)
                     }
 
