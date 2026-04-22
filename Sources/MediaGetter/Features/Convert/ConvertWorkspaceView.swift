@@ -84,7 +84,8 @@ struct ConvertWorkspaceView: View {
                             TextField("Audio codec override (optional)", text: $appState.convertDraft.audioCodecOverride)
                             TextField("Audio bitrate override (optional)", text: $appState.convertDraft.audioBitrateOverride)
                         }
-                        .textFieldStyle(.roundedBorder)
+                        .textFieldStyle(.plain)
+                        .studioInputStyle()
                         .padding(.top, 12)
                     }
 
@@ -97,6 +98,7 @@ struct ConvertWorkspaceView: View {
                             }
                         )
                     )
+                    .toggleStyle(StudioToggleStyle())
                     .accessibilityIdentifier(AccessibilityID.convertSubtitleToggle)
 
                     if appState.convertDraft.subtitleWorkflow.generatesSubtitles {
@@ -110,6 +112,7 @@ struct ConvertWorkspaceView: View {
                             "Burn captions into exported video",
                             isOn: $appState.convertDraft.subtitleWorkflow.burnInVideo
                         )
+                        .toggleStyle(StudioToggleStyle())
 
                         if appState.convertDraft.selectedPreset.audioOnly {
                             Text("Caption burn-in only applies to video presets.")

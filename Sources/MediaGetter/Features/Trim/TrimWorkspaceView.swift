@@ -60,6 +60,7 @@ struct TrimWorkspaceView: View {
                             appState.refreshTrimPlan()
                         }
                     ))
+                    .toggleStyle(StudioToggleStyle())
 
                     Toggle(
                         "Generate subtitles after export",
@@ -70,6 +71,7 @@ struct TrimWorkspaceView: View {
                             }
                         )
                     )
+                    .toggleStyle(StudioToggleStyle())
                     .accessibilityIdentifier(AccessibilityID.trimSubtitleToggle)
 
                     if appState.trimDraft.subtitleWorkflow.generatesSubtitles {
@@ -83,6 +85,7 @@ struct TrimWorkspaceView: View {
                             "Burn captions into exported video",
                             isOn: $appState.trimDraft.subtitleWorkflow.burnInVideo
                         )
+                        .toggleStyle(StudioToggleStyle())
 
                         Label(
                             appState.transcriptionRuntimeSummary,
@@ -141,9 +144,12 @@ struct TrimWorkspaceView: View {
                                     Button("Mark In") {
                                         appState.setTrimStartToCurrentPosition()
                                     }
+                                    .buttonStyle(InteractiveButtonStyle())
+
                                     Button("Mark Out") {
                                         appState.setTrimEndToCurrentPosition()
                                     }
+                                    .buttonStyle(InteractiveButtonStyle())
                                 }
                             }
                         }
@@ -174,8 +180,13 @@ struct TrimWorkspaceView: View {
                                         set: { appState.updateTrimStart(from: $0) }
                                     )
                                 )
+                                .textFieldStyle(.plain)
+                                .studioInputStyle()
+
                                 Button("-0.5s") { appState.nudgeTrimStart(by: -0.5) }
+                                    .buttonStyle(InteractiveButtonStyle())
                                 Button("+0.5s") { appState.nudgeTrimStart(by: 0.5) }
+                                    .buttonStyle(InteractiveButtonStyle())
                             }
 
                             GridRow {
@@ -188,11 +199,15 @@ struct TrimWorkspaceView: View {
                                         set: { appState.updateTrimEnd(from: $0) }
                                     )
                                 )
+                                .textFieldStyle(.plain)
+                                .studioInputStyle()
+
                                 Button("-0.5s") { appState.nudgeTrimEnd(by: -0.5) }
+                                    .buttonStyle(InteractiveButtonStyle())
                                 Button("+0.5s") { appState.nudgeTrimEnd(by: 0.5) }
+                                    .buttonStyle(InteractiveButtonStyle())
                             }
                         }
-                        .textFieldStyle(.roundedBorder)
                     }
                 }
             }

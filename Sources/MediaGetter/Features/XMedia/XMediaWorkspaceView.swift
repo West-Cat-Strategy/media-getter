@@ -20,7 +20,8 @@ struct XMediaWorkspaceView: View {
                             .font(.title3)
                             .foregroundStyle(.secondary)
                         TextField("username", text: $appState.xMediaDraft.handle)
-                            .textFieldStyle(.roundedBorder)
+                            .textFieldStyle(.plain)
+                            .studioInputStyle()
                             .font(.title3)
                     }
 
@@ -35,7 +36,8 @@ struct XMediaWorkspaceView: View {
                         Text("Cookie file path")
                             .font(.subheadline)
                         TextField("~/twitter-cookies.txt", text: $appState.xMediaDraft.cookieFilePath)
-                            .textFieldStyle(.roundedBorder)
+                            .textFieldStyle(.plain)
+                            .studioInputStyle()
                     }
 
                     PathPickerRow(
@@ -49,16 +51,18 @@ struct XMediaWorkspaceView: View {
                         Button("Start Download") {
                             Task { await appState.startPrimaryAction() }
                         }
-                        .buttonStyle(.borderedProminent)
+                        .buttonStyle(InteractiveButtonStyle())
 
                         Button("Stop / Cancel") {
                             appState.cancelSelectedJob()
                         }
+                        .buttonStyle(InteractiveButtonStyle())
                         
                         Button("Open Folder") {
                             appState.revealSelectedOutput()
                         }
                         .disabled(appState.xMediaDraft.destinationDirectoryPath.isEmpty)
+                        .buttonStyle(InteractiveButtonStyle())
                     }
                 }
                 

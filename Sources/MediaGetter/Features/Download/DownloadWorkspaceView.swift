@@ -18,7 +18,8 @@ struct DownloadWorkspaceView: View {
                         .font(.headline)
 
                     TextField("https://example.com/video", text: $appState.downloadDraft.urlString)
-                        .textFieldStyle(.roundedBorder)
+                        .textFieldStyle(.plain)
+                        .studioInputStyle()
                         .accessibilityIdentifier(AccessibilityID.downloadURLField)
 
                     Picker("Authentication", selection: $appState.downloadDraft.selectedAuthProfileID) {
@@ -128,6 +129,8 @@ struct DownloadWorkspaceView: View {
                         }
 
                         TextField("Filename template", text: $appState.downloadDraft.filenameTemplate)
+                            .textFieldStyle(.plain)
+                            .studioInputStyle()
 
                         PathPickerRow(
                             title: "Destination folder",
@@ -175,6 +178,7 @@ struct DownloadWorkspaceView: View {
                                 "Burn captions into exported video",
                                 isOn: $appState.downloadDraft.subtitleWorkflow.burnInVideo
                             )
+                            .toggleStyle(StudioToggleStyle())
 
                             if appState.downloadDraft.selectedPreset.audioOnly {
                                 Text("Caption burn-in only applies to video presets.")

@@ -206,8 +206,7 @@ private struct WorkspaceTopBar: View {
                         Label("Start", systemImage: "play.fill")
                             .frame(minWidth: 92)
                     }
-                    .buttonStyle(.borderedProminent)
-                    .controlSize(.large)
+                    .buttonStyle(InteractiveButtonStyle())
 
                     actionButton("Cancel", systemImage: "xmark") {
                         appState.cancelSelectedJob()
@@ -256,8 +255,7 @@ private struct WorkspaceTopBar: View {
             Label(title, systemImage: systemImage)
                 .frame(minWidth: 96)
         }
-        .buttonStyle(.bordered)
-        .controlSize(.large)
+        .buttonStyle(InteractiveButtonStyle())
     }
 }
 
@@ -302,19 +300,8 @@ private struct SidebarRail: View {
                         }
                         .padding(.horizontal, 14)
                         .padding(.vertical, 12)
-                        .background(
-                            RoundedRectangle(cornerRadius: 18, style: .continuous)
-                                .fill(appState.selectedSection == section ? Color.white.opacity(0.12) : Color.clear)
-                        )
-                        .overlay(
-                            RoundedRectangle(cornerRadius: 18, style: .continuous)
-                                .strokeBorder(
-                                    appState.selectedSection == section ? Color.white.opacity(0.18) : Color.white.opacity(0.05),
-                                    lineWidth: 1
-                                )
-                        )
                     }
-                    .buttonStyle(.plain)
+                    .buttonStyle(SidebarButtonStyle(isSelected: appState.selectedSection == section))
                     .contentShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
                     .accessibilityIdentifier(accessibilityIdentifier(for: section))
                 }
