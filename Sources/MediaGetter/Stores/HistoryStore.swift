@@ -31,7 +31,8 @@ final class HistoryStore {
             createdAt: job.completedAt ?? Date(),
             preset: job.request.preset,
             transcriptionOutputFormat: job.request.transcriptionOutputFormat,
-            summary: job.phase
+            summary: job.phase,
+            jobRequest: job.request
         )
 
         entries.removeAll { $0.id == entry.id }

@@ -3,6 +3,7 @@ import Foundation
 
 enum AppSection: String, CaseIterable, Identifiable {
     case download
+    case xMedia
     case convert
     case trim
     case transcribe
@@ -14,6 +15,7 @@ enum AppSection: String, CaseIterable, Identifiable {
     var title: String {
         switch self {
         case .download: "Download"
+        case .xMedia: "X Media"
         case .convert: "Convert"
         case .trim: "Trim"
         case .transcribe: "Transcribe"
@@ -25,6 +27,7 @@ enum AppSection: String, CaseIterable, Identifiable {
     var subtitle: String {
         switch self {
         case .download: "Paste a URL and pull media"
+        case .xMedia: "Download media from X profiles"
         case .convert: "Transcode local or downloaded files"
         case .trim: "Preview and cut a single clip"
         case .transcribe: "Transcribe local or downloaded media"
@@ -36,6 +39,7 @@ enum AppSection: String, CaseIterable, Identifiable {
     var systemImage: String {
         switch self {
         case .download: "arrow.down.circle"
+        case .xMedia: "at.circle"
         case .convert: "arrow.triangle.2.circlepath.circle"
         case .trim: "scissors"
         case .transcribe: "text.bubble"
@@ -65,6 +69,7 @@ enum InspectorMode: String, CaseIterable, Identifiable {
 
 enum JobKind: String, Codable {
     case download
+    case xMedia
     case convert
     case trim
     case transcribe
@@ -94,6 +99,7 @@ enum JobStatus: String, Codable {
 
 enum BundledTool: String, CaseIterable, Codable, Identifiable {
     case ytDlp = "yt-dlp"
+    case galleryDl = "gallery-dl"
     case ffmpeg
     case ffprobe
     case deno
@@ -104,6 +110,7 @@ enum BundledTool: String, CaseIterable, Codable, Identifiable {
     var displayName: String {
         switch self {
         case .ytDlp: "yt-dlp"
+        case .galleryDl: "gallery-dl"
         case .ffmpeg: "ffmpeg"
         case .ffprobe: "ffprobe"
         case .deno: "deno"
@@ -113,7 +120,7 @@ enum BundledTool: String, CaseIterable, Codable, Identifiable {
 
     var versionArguments: [String] {
         switch self {
-        case .ytDlp:
+        case .ytDlp, .galleryDl:
             ["--version"]
         case .ffmpeg, .ffprobe:
             ["-version"]
@@ -126,7 +133,7 @@ enum BundledTool: String, CaseIterable, Codable, Identifiable {
 
     var requiredAtLaunch: Bool {
         switch self {
-        case .ytDlp, .ffmpeg, .ffprobe, .deno, .whisperCLI:
+        case .ytDlp, .galleryDl, .ffmpeg, .ffprobe, .deno, .whisperCLI:
             true
         }
     }
@@ -716,8 +723,33 @@ struct TranscribeRequest: Equatable {
     var overwriteExisting: Bool
 }
 
+enum XBrowser: String, Codable, CaseIterable, Identifiable {
+    case chrome
+    case firefox
+    case brave
+
+    var id: Self { self }
+    var title: String { rawValue.capitalized }
+
+    var ytDlpArgument: String {
+        switch self {
+        case .chrome: "chrome"
+        case .firefox: "firefox"
+        case .brave: "brave"
+        }
+    }
+}
+
+struct XMediaRequest: Equatable {
+    var handle: String
+    var destinationDirectory: URL
+    var browser: XBrowser
+    var cookieFilePath: String
+}
+
 enum JobPayload: Equatable {
     case download(DownloadRequest)
+    case xMedia(XMediaRequest)
     case convert(ConvertRequest)
     case trim(TrimRequest)
     case transcribe(TranscribeRequest)
@@ -829,6 +861,7 @@ struct HistoryEntry: Codable, Equatable, Identifiable {
     var preset: OutputPresetID?
     var transcriptionOutputFormat: TranscriptionOutputFormat?
     var summary: String
+    var jobRequest: JobRequest?
 
     init(
         id: UUID,
@@ -843,7 +876,8 @@ struct HistoryEntry: Codable, Equatable, Identifiable {
         createdAt: Date,
         preset: OutputPresetID?,
         transcriptionOutputFormat: TranscriptionOutputFormat?,
-        summary: String
+        summary: String,
+        jobRequest: JobRequest? = nil
     ) {
         self.id = id
         self.jobKind = jobKind
@@ -862,6 +896,7 @@ struct HistoryEntry: Codable, Equatable, Identifiable {
         self.preset = preset
         self.transcriptionOutputFormat = transcriptionOutputFormat
         self.summary = summary
+        self.jobRequest = jobRequest
     }
 
     var outputPath: String? {
@@ -1082,4 +1117,11 @@ struct TrimDraft {
     var playerPosition: TimeInterval = 0
     var isLoadingThumbnails: Bool = false
     var currentPlan: TrimPlan = .init(strategy: .reencode, reason: "Open a clip to evaluate trim strategy.")
+}
+
+struct XMediaDraft: Equatable {
+    var handle: String = ""
+    var destinationDirectoryPath: String = ""
+    var browser: XBrowser = .chrome
+    var cookieFilePath: String = (NSHomeDirectory() as NSString).appendingPathComponent("twitter-cookies.txt")
 }

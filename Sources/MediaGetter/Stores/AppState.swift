@@ -32,6 +32,7 @@ final class AppState {
     var inspectorMode: InspectorMode?
     var inspectorArtifactPath: String?
     var downloadDraft: DownloadDraft
+    var xMediaDraft: XMediaDraft
     var convertDraft: ConvertDraft
     var transcribeDraft: TranscribeDraft
     var trimDraft: TrimDraft
@@ -62,6 +63,9 @@ final class AppState {
     private let downloadService: DownloadService
 
     @ObservationIgnored
+    private let xMediaService: XMediaService
+
+    @ObservationIgnored
     private let transcodeService: TranscodeService
 
     @ObservationIgnored
@@ -89,6 +93,7 @@ final class AppState {
         self.toolchainManager = toolchainManager
         self.downloadProbeService = DownloadProbeService(toolchainManager: toolchainManager, processRunner: processRunner)
         self.downloadService = DownloadService(toolchainManager: toolchainManager, processRunner: processRunner)
+        self.xMediaService = XMediaService(toolchainManager: toolchainManager, processRunner: processRunner)
         self.transcodeService = TranscodeService(toolchainManager: toolchainManager, processRunner: processRunner)
         self.trimService = TrimService(toolchainManager: toolchainManager, processRunner: processRunner)
         self.transcriptionService = TranscriptionService(toolchainManager: toolchainManager, processRunner: processRunner)
@@ -112,6 +117,9 @@ final class AppState {
             subtitleWorkflow: defaultDownloadSubtitleWorkflow,
             filenameTemplate: preferencesStore.filenameTemplate,
             selectedAuthProfileID: authProfileStore.defaultProfileID
+        )
+        self.xMediaDraft = XMediaDraft(
+            destinationDirectoryPath: destinationPath
         )
         self.convertDraft = ConvertDraft(
             selectedPreset: preferencesStore.defaultConvertPreset,
@@ -299,6 +307,8 @@ final class AppState {
             } else {
                 enqueueDownload()
             }
+        case .xMedia:
+            enqueueXMedia()
         case .convert:
             enqueueConvert()
         case .trim:
@@ -323,6 +333,8 @@ final class AppState {
         switch targetSection {
         case .download:
             downloadDraft.destinationDirectoryPath = folderURL.path
+        case .xMedia:
+            xMediaDraft.destinationDirectoryPath = folderURL.path
         case .convert:
             convertDraft.destinationDirectoryPath = folderURL.path
         case .transcribe:
@@ -359,6 +371,8 @@ final class AppState {
             targetSection = .trim
         case .transcribe:
             targetSection = .transcribe
+        case .xMedia:
+            targetSection = .xMedia
         default:
             targetSection = .convert
         }
@@ -406,7 +420,7 @@ final class AppState {
                     : transcribeDraft.destinationDirectoryPath
                 inspectorMode = .metadata
 
-            case .download, .queue, .history:
+            case .download, .xMedia, .queue, .history:
                 break
             }
         } catch {
@@ -452,6 +466,35 @@ final class AppState {
                 preset: request.preset,
                 transcriptionOutputFormat: nil,
                 payload: .download(request)
+            )
+        )
+        selectedSection = .queue
+        inspectorMode = .logs
+    }
+
+    func enqueueXMedia() {
+        let trimmedHandle = xMediaDraft.handle.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmedHandle.isEmpty else {
+            alert = AppAlert(title: "Missing handle", message: "Enter an X profile handle first.")
+            return
+        }
+
+        let request = XMediaRequest(
+            handle: trimmedHandle,
+            destinationDirectory: URL(fileURLWithPath: currentDestinationPath(for: .xMedia), isDirectory: true),
+            browser: xMediaDraft.browser,
+            cookieFilePath: xMediaDraft.cookieFilePath
+        )
+
+        queueStore.enqueue(
+            JobRequest(
+                kind: .xMedia,
+                title: "X: @\(trimmedHandle)",
+                subtitle: "Media Download",
+                source: .remote("https://x.com/\(trimmedHandle)/media"),
+                preset: nil,
+                transcriptionOutputFormat: nil,
+                payload: .xMedia(request)
             )
         )
         selectedSection = .queue
@@ -613,6 +656,12 @@ final class AppState {
                     previewArtifact(artifact)
                 }
             }
+        case .xMedia:
+            selectedSection = .xMedia
+            if case .xMedia(let req) = entry.jobRequest?.payload {
+                xMediaDraft.handle = req.handle
+                xMediaDraft.cookieFilePath = req.cookieFilePath
+            }
         }
     }
 
@@ -626,7 +675,7 @@ final class AppState {
             return trimDraft.metadata
         case .transcribe:
             return transcribeDraft.metadata
-        case .queue, .history:
+        case .xMedia, .queue, .history:
             return nil
         }
     }
@@ -639,7 +688,7 @@ final class AppState {
             return convertDraft.selectedPreset
         case .trim:
             return trimDraft.selectedPreset
-        case .transcribe:
+        case .xMedia, .transcribe:
             return nil
         case .queue:
             return queueStore.selectedJob?.request.preset
@@ -832,7 +881,7 @@ final class AppState {
         case .trim(let request):
             workflow = request.subtitleWorkflow
             overwriteExisting = request.overwriteExisting
-        case .transcribe:
+        case .xMedia, .transcribe:
             return nil
         }
 
@@ -1010,7 +1059,7 @@ final class AppState {
                 fileSize: fallback?.fileSize,
                 formats: []
             )
-        case .transcribe:
+        case .xMedia, .transcribe:
             return fallback
         }
     }
@@ -1174,7 +1223,7 @@ final class AppState {
                 onEvent: onEvent
             )
 
-        case .transcribe:
+        case .xMedia, .transcribe:
             return ResolvedSubtitleArtifacts(artifacts: artifacts, canonicalSubtitleArtifact: nil)
         }
     }
@@ -1317,7 +1366,7 @@ final class AppState {
         case .history:
             guard selectedHistoryEntry?.jobKind == .transcribe else { return nil }
             return selectedHistoryEntry?.outputURL
-        case .download, .convert, .trim, .transcribe:
+        case .download, .xMedia, .convert, .trim, .transcribe:
             return nil
         }
     }
@@ -1330,6 +1379,8 @@ final class AppState {
             return convertDraft.destinationDirectoryPath.isEmpty ? preferencesStore.defaultDownloadFolderPath : convertDraft.destinationDirectoryPath
         case .transcribe:
             return transcribeDraft.destinationDirectoryPath.isEmpty ? preferencesStore.defaultDownloadFolderPath : transcribeDraft.destinationDirectoryPath
+        case .xMedia:
+            return xMediaDraft.destinationDirectoryPath.isEmpty ? preferencesStore.defaultDownloadFolderPath : xMediaDraft.destinationDirectoryPath
         case .trim:
             return trimDraft.destinationDirectoryPath.isEmpty ? preferencesStore.defaultDownloadFolderPath : trimDraft.destinationDirectoryPath
         case .queue, .history:
@@ -1353,6 +1404,8 @@ final class AppState {
                 },
                 onEvent: onEvent
             )
+        case .xMedia(let request):
+            return try await xMediaService.execute(request: request, onEvent: onEvent)
         case .convert(let request):
             let metadata = convertDraft.inputURL == request.inputURL ? convertDraft.metadata : nil
             return try await executeExportPipeline(

@@ -157,6 +157,8 @@ final class ToolchainManager: @unchecked Sendable {
         switch tool {
         case .ytDlp:
             return firstLine
+        case .galleryDl:
+            return firstLine.replacingOccurrences(of: "gallery-dl ", with: "")
         case .ffmpeg:
             return firstLine.replacingOccurrences(of: "ffmpeg version ", with: "")
         case .ffprobe:

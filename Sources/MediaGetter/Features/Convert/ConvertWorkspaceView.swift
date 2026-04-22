@@ -29,12 +29,14 @@ struct ConvertWorkspaceView: View {
                         Button("Open File") {
                             appState.openMediaFileForCurrentSection()
                         }
+                        .buttonStyle(InteractiveButtonStyle())
                         .accessibilityIdentifier(AccessibilityID.convertOpenButton)
 
                         if appState.convertDraft.inputURL != nil {
                             Button("Show Metadata") {
                                 appState.inspectorMode = .metadata
                             }
+                            .buttonStyle(InteractiveButtonStyle())
                         }
                     }
                 }
@@ -82,7 +84,8 @@ struct ConvertWorkspaceView: View {
                             TextField("Audio codec override (optional)", text: $appState.convertDraft.audioCodecOverride)
                             TextField("Audio bitrate override (optional)", text: $appState.convertDraft.audioBitrateOverride)
                         }
-                        .textFieldStyle(.roundedBorder)
+                        .textFieldStyle(.plain)
+                        .studioInputStyle()
                         .padding(.top, 12)
                     }
 
@@ -95,6 +98,7 @@ struct ConvertWorkspaceView: View {
                             }
                         )
                     )
+                    .toggleStyle(StudioToggleStyle())
                     .accessibilityIdentifier(AccessibilityID.convertSubtitleToggle)
 
                     if appState.convertDraft.subtitleWorkflow.generatesSubtitles {
@@ -108,6 +112,7 @@ struct ConvertWorkspaceView: View {
                             "Burn captions into exported video",
                             isOn: $appState.convertDraft.subtitleWorkflow.burnInVideo
                         )
+                        .toggleStyle(StudioToggleStyle())
 
                         if appState.convertDraft.selectedPreset.audioOnly {
                             Text("Caption burn-in only applies to video presets.")
@@ -132,6 +137,7 @@ struct ConvertWorkspaceView: View {
                             || (appState.convertDraft.subtitleWorkflow.needsLocalRuntime && !appState.isTranscriptionReady)
                             || (appState.convertDraft.subtitleWorkflow.burnInVideo && appState.convertDraft.selectedPreset.audioOnly)
                     )
+                    .buttonStyle(InteractiveButtonStyle())
                     .accessibilityIdentifier(AccessibilityID.convertQueueButton)
                 }
             }
