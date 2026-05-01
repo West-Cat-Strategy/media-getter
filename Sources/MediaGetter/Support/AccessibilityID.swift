@@ -2,6 +2,7 @@ import Foundation
 
 enum AccessibilityID {
     static let sidebarDownload = "sidebar-download"
+    static let sidebarXMedia = "sidebar-x-media"
     static let sidebarConvert = "sidebar-convert"
     static let sidebarTrim = "sidebar-trim"
     static let sidebarTranscribe = "sidebar-transcribe"

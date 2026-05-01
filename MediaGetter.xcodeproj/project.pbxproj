@@ -11,6 +11,7 @@
 		0D33ECB25077E1BD00BADEB4 /* PreferencesStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6C063F13E52B6441B90221FD /* PreferencesStore.swift */; };
 		0E438479FC531E60041925B9 /* SecretStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8EDF1DF578C335C5CE4F3E6B /* SecretStore.swift */; };
 		0F5C6BB283EBFF9AA88B69C8 /* QueueWorkspaceView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A8997C12FF1EB14BE12A500F /* QueueWorkspaceView.swift */; };
+		0FF26141C006B9310FFE4997 /* DesignSystem.swift in Sources */ = {isa = PBXBuildFile; fileRef = 055D24149F8A8294725C939D /* DesignSystem.swift */; };
 		10C98726395F9EE39098D861 /* FileHelpers.swift in Sources */ = {isa = PBXBuildFile; fileRef = EFEA3C10E446DA687B1720F3 /* FileHelpers.swift */; };
 		1BE13E6D7F6022EFFCB34F9C /* MediaGetterCommands.swift in Sources */ = {isa = PBXBuildFile; fileRef = 44886D6E27A68719B1072F23 /* MediaGetterCommands.swift */; };
 		215FBFC95DDFC6D2FAFD4FB5 /* HistoryWorkspaceView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 100CAC5CFC59C8008602B9F7 /* HistoryWorkspaceView.swift */; };
@@ -25,6 +26,7 @@
 		6DE5D3F4B1B2D54E989531FC /* SettingsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0DA60BEB27B3650D4570F4EF /* SettingsView.swift */; };
 		8DC9EDDD918F2862F74AA9FE /* ConvertWorkspaceView.swift in Sources */ = {isa = PBXBuildFile; fileRef = AB73807E4AEFFC4FB07BD3E5 /* ConvertWorkspaceView.swift */; };
 		922ED8C3D1BA1ED0341FB679 /* AccessibilityID.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4D177905E094FD4C32859FBC /* AccessibilityID.swift */; };
+		93BD2805A9EDC70F5E7E3E52 /* XMediaWorkspaceView.swift in Sources */ = {isa = PBXBuildFile; fileRef = E652611274547C854E056083 /* XMediaWorkspaceView.swift */; };
 		98D34B9668DCE5A899D61EA3 /* Formatters.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9499D82637B1E58010D3A0CD /* Formatters.swift */; };
 		9E02B15F9A782CEF6F72444F /* UIComponents.swift in Sources */ = {isa = PBXBuildFile; fileRef = 50225B3EC8FE9352B7D28F3C /* UIComponents.swift */; };
 		A14963B0D11258E5D3167C2C /* DownloadAuthCommandBuilder.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0AD64B42A6D3AFEBEC891906 /* DownloadAuthCommandBuilder.swift */; };
@@ -38,6 +40,7 @@
 		E71DE82A717B51BB5CD9CB9D /* MediaServices.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8CA6B512CF370B3012A39A84 /* MediaServices.swift */; };
 		EAFA1447A130B98BCAC0CA9A /* MediaGetterUITests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8FB26C909EB97048C0F58B83 /* MediaGetterUITests.swift */; };
 		FA37C6217E3601A98C82A23B /* AppUpdateManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = D6FF34B60445CD3B2574C4B3 /* AppUpdateManager.swift */; };
+		FEE74D198578D5D5C8F52298 /* XMediaService.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5661B604303CBFA8DBA3C457 /* XMediaService.swift */; };
 		FF06EDD29C5974B1C54CFB30 /* MediaGetterApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = 29407BE0DAD562F72FBB766E /* MediaGetterApp.swift */; };
 /* End PBXBuildFile section */
 
@@ -59,6 +62,7 @@
 /* End PBXContainerItemProxy section */
 
 /* Begin PBXFileReference section */
+		055D24149F8A8294725C939D /* DesignSystem.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DesignSystem.swift; sourceTree = "<group>"; };
 		0AD64B42A6D3AFEBEC891906 /* DownloadAuthCommandBuilder.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DownloadAuthCommandBuilder.swift; sourceTree = "<group>"; };
 		0D14118F700DB3CBA47E8850 /* AuthProfileStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AuthProfileStore.swift; sourceTree = "<group>"; };
 		0DA60BEB27B3650D4570F4EF /* SettingsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SettingsView.swift; sourceTree = "<group>"; };
@@ -71,6 +75,7 @@
 		4D177905E094FD4C32859FBC /* AccessibilityID.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AccessibilityID.swift; sourceTree = "<group>"; };
 		50225B3EC8FE9352B7D28F3C /* UIComponents.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = UIComponents.swift; sourceTree = "<group>"; };
 		50C760BB3BE3E24CF7D87FF3 /* DownloadAuthProfileSheet.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DownloadAuthProfileSheet.swift; sourceTree = "<group>"; };
+		5661B604303CBFA8DBA3C457 /* XMediaService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = XMediaService.swift; sourceTree = "<group>"; };
 		5D320374313E2E0207CFD17F /* AppState.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppState.swift; sourceTree = "<group>"; };
 		6C063F13E52B6441B90221FD /* PreferencesStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PreferencesStore.swift; sourceTree = "<group>"; };
 		83BD0BC8DA0D3E3D9FBAA7E6 /* MediaGetterTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MediaGetterTests.swift; sourceTree = "<group>"; };
@@ -90,6 +95,7 @@
 		B6CD23A5BEF94B3D2E9C6BF4 /* DownloadWorkspaceView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DownloadWorkspaceView.swift; sourceTree = "<group>"; };
 		D6FF34B60445CD3B2574C4B3 /* AppUpdateManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppUpdateManager.swift; sourceTree = "<group>"; };
 		DE2CD4569EA8D51680E74166 /* TrimWorkspaceView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TrimWorkspaceView.swift; sourceTree = "<group>"; };
+		E652611274547C854E056083 /* XMediaWorkspaceView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = XMediaWorkspaceView.swift; sourceTree = "<group>"; };
 		E8F1A2197EBB8DAAA24A8EBB /* ProcessRunner.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ProcessRunner.swift; sourceTree = "<group>"; };
 		EFEA3C10E446DA687B1720F3 /* FileHelpers.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FileHelpers.swift; sourceTree = "<group>"; };
 		FDEE0951CDE7747376B211C0 /* RootSplitView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RootSplitView.swift; sourceTree = "<group>"; };
@@ -155,6 +161,7 @@
 				E8F1A2197EBB8DAAA24A8EBB /* ProcessRunner.swift */,
 				8EDF1DF578C335C5CE4F3E6B /* SecretStore.swift */,
 				AA61ED95BC959201E34780C9 /* ToolchainManager.swift */,
+				5661B604303CBFA8DBA3C457 /* XMediaService.swift */,
 			);
 			path = Services;
 			sourceTree = "<group>";
@@ -174,6 +181,14 @@
 				83BD0BC8DA0D3E3D9FBAA7E6 /* MediaGetterTests.swift */,
 			);
 			path = MediaGetterTests;
+			sourceTree = "<group>";
+		};
+		5BD881A6B76A5F5D67EC154D /* XMedia */ = {
+			isa = PBXGroup;
+			children = (
+				E652611274547C854E056083 /* XMediaWorkspaceView.swift */,
+			);
+			path = XMedia;
 			sourceTree = "<group>";
 		};
 		7258A927254B7D6461A88C2F /* Shared */ = {
@@ -258,6 +273,7 @@
 			isa = PBXGroup;
 			children = (
 				4D177905E094FD4C32859FBC /* AccessibilityID.swift */,
+				055D24149F8A8294725C939D /* DesignSystem.swift */,
 				EFEA3C10E446DA687B1720F3 /* FileHelpers.swift */,
 				9499D82637B1E58010D3A0CD /* Formatters.swift */,
 			);
@@ -295,6 +311,7 @@
 				7258A927254B7D6461A88C2F /* Shared */,
 				30D778E8C6015C83F0E3E3BE /* Transcribe */,
 				205AE8E0D49553DB2081AEBB /* Trim */,
+				5BD881A6B76A5F5D67EC154D /* XMedia */,
 			);
 			path = Features;
 			sourceTree = "<group>";
@@ -419,6 +436,7 @@
 			);
 			outputPaths = (
 				"$(TARGET_BUILD_DIR)/$(UNLOCALIZED_RESOURCES_FOLDER_PATH)/Tools/yt-dlp",
+				"$(TARGET_BUILD_DIR)/$(UNLOCALIZED_RESOURCES_FOLDER_PATH)/Tools/gallery-dl",
 				"$(TARGET_BUILD_DIR)/$(UNLOCALIZED_RESOURCES_FOLDER_PATH)/Tools/ffmpeg",
 				"$(TARGET_BUILD_DIR)/$(UNLOCALIZED_RESOURCES_FOLDER_PATH)/Tools/ffprobe",
 				"$(TARGET_BUILD_DIR)/$(UNLOCALIZED_RESOURCES_FOLDER_PATH)/Tools/deno",
@@ -428,7 +446,7 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 			shellPath = /bin/sh;
-			shellScript = "set -euo pipefail\n\nTOOLS_DIR=\"${TARGET_BUILD_DIR}/${UNLOCALIZED_RESOURCES_FOLDER_PATH}/Tools\"\nMODELS_DIR=\"${TARGET_BUILD_DIR}/${UNLOCALIZED_RESOURCES_FOLDER_PATH}/Models\"\nmkdir -p \"$TOOLS_DIR\"\nmkdir -p \"$MODELS_DIR\"\n\nresolve_vendored_tool() {\n  local tool=\"$1\"\n  local source_path=\"${SRCROOT}/Vendor/Tools/${tool}\"\n\n  if [[ -x \"$source_path\" ]]; then\n    printf '%s\\n' \"$source_path\"\n    return 0\n  fi\n\n  echo \"error: missing vendored tool '$tool'. Run script/vendor_media_tools.sh to populate Vendor/Tools/${tool}\" >&2\n  exit 1\n}\n\ncopy_required_model() {\n  local asset=\"$1\"\n  local source_path=\"${SRCROOT}/Vendor/Models/${asset}\"\n  local destination_path=\"${MODELS_DIR}/${asset}\"\n\n  rm -rf \"$destination_path\"\n\n  if [[ ! -e \"$source_path\" ]]; then\n    echo \"error: missing vendored model asset '$asset'. Run script/vendor_media_tools.sh to populate Vendor/Models/${asset}\" >&2\n    exit 1\n  fi\n\n  cp -R \"$source_path\" \"$destination_path\"\n}\n\nvalidate_arm64_tool() {\n  local tool_path=\"$1\"\n  local tool_name=\"$2\"\n  local description\n\n  description=\"$(/usr/bin/file -b \"$tool_path\")\"\n  if [[ \"$description\" == *\"universal binary\"* ]] || [[ \"$description\" != *\"arm64\"* ]]; then\n    echo \"error: vendored tool '$tool_name' must be arm64-only. Found: $description\" >&2\n    exit 1\n  fi\n}\n\nvalidate_self_contained_tool() {\n  local tool_path=\"$1\"\n  local tool_name=\"$2\"\n  local dependency\n  local dependencies_file\n\n  dependencies_file=\"$(mktemp)\"\n  /usr/bin/otool -L \"$tool_path\" | tail -n +2 > \"$dependencies_file\"\n\n  while IFS= read -r line; do\n    line=\"${line#\"${line%%[![:space:]]*}\"}\"\n    [[ -z \"$line\" ]] && continue\n    [[ \"$line\" == *\"(architecture \"*\"):\" ]] && continue\n    dependency=\"${line%% *}\"\n\n    case \"$dependency\" in\n      /System/*|/usr/lib/*|@executable_path/*|@loader_path/*|@rpath/*)\n        ;;\n      *)\n        echo \"error: vendored tool '$tool_name' links an external dependency: $dependency\" >&2\n        exit 1\n        ;;\n    esac\n  done < \"$dependencies_file\"\n\n  rm -f \"$dependencies_file\"\n}\n\nfor tool in yt-dlp ffmpeg ffprobe deno whisper-cli; do\n  source_path=\"$(resolve_vendored_tool \"$tool\")\"\n  validate_arm64_tool \"$source_path\" \"$tool\"\n  validate_self_contained_tool \"$source_path\" \"$tool\"\n  rm -f \"$TOOLS_DIR/$tool\"\n  cp -f \"$source_path\" \"$TOOLS_DIR/$tool\"\n  chmod +x \"$TOOLS_DIR/$tool\"\ndone\n\ncopy_required_model \"ggml-base.en.bin\"\ncopy_required_model \"ggml-base.en-encoder.mlmodelc\"\n";
+			shellScript = "set -euo pipefail\n\nTOOLS_DIR=\"${TARGET_BUILD_DIR}/${UNLOCALIZED_RESOURCES_FOLDER_PATH}/Tools\"\nMODELS_DIR=\"${TARGET_BUILD_DIR}/${UNLOCALIZED_RESOURCES_FOLDER_PATH}/Models\"\nmkdir -p \"$TOOLS_DIR\"\nmkdir -p \"$MODELS_DIR\"\n\nresolve_vendored_tool() {\n  local tool=\"$1\"\n  local source_path=\"${SRCROOT}/Vendor/Tools/${tool}\"\n\n  if [[ -x \"$source_path\" ]]; then\n    printf '%s\\n' \"$source_path\"\n    return 0\n  fi\n\n  echo \"error: missing vendored tool '$tool'. Run script/vendor_media_tools.sh to populate Vendor/Tools/${tool}\" >&2\n  exit 1\n}\n\ncopy_required_model() {\n  local asset=\"$1\"\n  local source_path=\"${SRCROOT}/Vendor/Models/${asset}\"\n  local destination_path=\"${MODELS_DIR}/${asset}\"\n\n  rm -rf \"$destination_path\"\n\n  if [[ ! -e \"$source_path\" ]]; then\n    echo \"error: missing vendored model asset '$asset'. Run script/vendor_media_tools.sh to populate Vendor/Models/${asset}\" >&2\n    exit 1\n  fi\n\n  cp -R \"$source_path\" \"$destination_path\"\n}\n\nvalidate_arm64_tool() {\n  local tool_path=\"$1\"\n  local tool_name=\"$2\"\n  local description\n\n  description=\"$(/usr/bin/file -b \"$tool_path\")\"\n  if [[ \"$description\" == *\"universal binary\"* ]] || [[ \"$description\" != *\"arm64\"* ]]; then\n    echo \"error: vendored tool '$tool_name' must be arm64-only. Found: $description\" >&2\n    exit 1\n  fi\n}\n\nvalidate_self_contained_tool() {\n  local tool_path=\"$1\"\n  local tool_name=\"$2\"\n  local dependency\n  local dependencies_file\n\n  dependencies_file=\"$(mktemp)\"\n  /usr/bin/otool -L \"$tool_path\" | tail -n +2 > \"$dependencies_file\"\n\n  while IFS= read -r line; do\n    line=\"${line#\"${line%%[![:space:]]*}\"}\"\n    [[ -z \"$line\" ]] && continue\n    [[ \"$line\" == *\"(architecture \"*\"):\" ]] && continue\n    dependency=\"${line%% *}\"\n\n    case \"$dependency\" in\n      /System/*|/usr/lib/*|@executable_path/*|@loader_path/*|@rpath/*)\n        ;;\n      *)\n        echo \"error: vendored tool '$tool_name' links an external dependency: $dependency\" >&2\n        exit 1\n        ;;\n    esac\n  done < \"$dependencies_file\"\n\n  rm -f \"$dependencies_file\"\n}\n\nfor tool in yt-dlp gallery-dl ffmpeg ffprobe deno whisper-cli; do\n  source_path=\"$(resolve_vendored_tool \"$tool\")\"\n  validate_arm64_tool \"$source_path\" \"$tool\"\n  validate_self_contained_tool \"$source_path\" \"$tool\"\n  rm -f \"$TOOLS_DIR/$tool\"\n  cp -f \"$source_path\" \"$TOOLS_DIR/$tool\"\n  chmod +x \"$TOOLS_DIR/$tool\"\ndone\n\ncopy_required_model \"ggml-base.en.bin\"\ncopy_required_model \"ggml-base.en-encoder.mlmodelc\"\n";
 		};
 		F78F90A81BA4717A068BBA52 /* Sign Nested Bundled Tools */ = {
 			isa = PBXShellScriptBuildPhase;
@@ -447,7 +465,7 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 			shellPath = /bin/sh;
-			shellScript = "set -euo pipefail\n\nif [[ \"${CODE_SIGNING_ALLOWED:-YES}\" != \"YES\" ]] || [[ -z \"${EXPANDED_CODE_SIGN_IDENTITY:-}\" ]]; then\n  echo \"Skipping nested bundled tool signing because no code signing identity is available.\"\n  exit 0\nfi\n\nTOOLS_DIR=\"${TARGET_BUILD_DIR}/${UNLOCALIZED_RESOURCES_FOLDER_PATH}/Tools\"\n\nfor tool in yt-dlp ffmpeg ffprobe deno whisper-cli; do\n  tool_path=\"${TOOLS_DIR}/${tool}\"\n  if [[ -f \"$tool_path\" ]]; then\n    /usr/bin/codesign --force --sign \"${EXPANDED_CODE_SIGN_IDENTITY}\" --timestamp=none \"$tool_path\"\n  fi\ndone\n";
+			shellScript = "set -euo pipefail\n\nif [[ \"${CODE_SIGNING_ALLOWED:-YES}\" != \"YES\" ]] || [[ -z \"${EXPANDED_CODE_SIGN_IDENTITY:-}\" ]]; then\n  echo \"Skipping nested bundled tool signing because no code signing identity is available.\"\n  exit 0\nfi\n\nTOOLS_DIR=\"${TARGET_BUILD_DIR}/${UNLOCALIZED_RESOURCES_FOLDER_PATH}/Tools\"\n\nfor tool in yt-dlp gallery-dl ffmpeg ffprobe deno whisper-cli; do\n  tool_path=\"${TOOLS_DIR}/${tool}\"\n  if [[ -f \"$tool_path\" ]]; then\n    /usr/bin/codesign --force --sign \"${EXPANDED_CODE_SIGN_IDENTITY}\" --timestamp=none \"$tool_path\"\n  fi\ndone\n";
 		};
 /* End PBXShellScriptBuildPhase section */
 
@@ -463,6 +481,7 @@
 				FA37C6217E3601A98C82A23B /* AppUpdateManager.swift in Sources */,
 				4ADB276C3F68318B54A201E9 /* AuthProfileStore.swift in Sources */,
 				8DC9EDDD918F2862F74AA9FE /* ConvertWorkspaceView.swift in Sources */,
+				0FF26141C006B9310FFE4997 /* DesignSystem.swift in Sources */,
 				A14963B0D11258E5D3167C2C /* DownloadAuthCommandBuilder.swift in Sources */,
 				2E3AAB57E93829A635CE031A /* DownloadAuthModels.swift in Sources */,
 				DC42E461054686E58596BF65 /* DownloadAuthProfileSheet.swift in Sources */,
@@ -485,6 +504,8 @@
 				DDCCC9A21B998A996795E133 /* TranscribeWorkspaceView.swift in Sources */,
 				B6537457CD7CA56FFE5F5705 /* TrimWorkspaceView.swift in Sources */,
 				9E02B15F9A782CEF6F72444F /* UIComponents.swift in Sources */,
+				FEE74D198578D5D5C8F52298 /* XMediaService.swift in Sources */,
+				93BD2805A9EDC70F5E7E3E52 /* XMediaWorkspaceView.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};

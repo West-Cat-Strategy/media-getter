@@ -1,0 +1,7 @@
+{
+    "chat.tools.terminal.autoApprove": {
+        "xcodebuild": true,
+        "script/build_and_run.sh": true,
+        "pgrep": true
+    }
+}

@@ -46,6 +46,7 @@ targets:
       - name: Bundle CLI Tools
         outputFiles:
           - $(TARGET_BUILD_DIR)/$(UNLOCALIZED_RESOURCES_FOLDER_PATH)/Tools/yt-dlp
+          - $(TARGET_BUILD_DIR)/$(UNLOCALIZED_RESOURCES_FOLDER_PATH)/Tools/gallery-dl
           - $(TARGET_BUILD_DIR)/$(UNLOCALIZED_RESOURCES_FOLDER_PATH)/Tools/ffmpeg
           - $(TARGET_BUILD_DIR)/$(UNLOCALIZED_RESOURCES_FOLDER_PATH)/Tools/ffprobe
           - $(TARGET_BUILD_DIR)/$(UNLOCALIZED_RESOURCES_FOLDER_PATH)/Tools/deno
@@ -128,7 +129,7 @@ targets:
             rm -f "$dependencies_file"
           }
 
-          for tool in yt-dlp ffmpeg ffprobe deno whisper-cli; do
+          for tool in yt-dlp gallery-dl ffmpeg ffprobe deno whisper-cli; do
             source_path="$(resolve_vendored_tool "$tool")"
             validate_arm64_tool "$source_path" "$tool"
             validate_self_contained_tool "$source_path" "$tool"
@@ -152,7 +153,7 @@ targets:
 
           TOOLS_DIR="${TARGET_BUILD_DIR}/${UNLOCALIZED_RESOURCES_FOLDER_PATH}/Tools"
 
-          for tool in yt-dlp ffmpeg ffprobe deno whisper-cli; do
+          for tool in yt-dlp gallery-dl ffmpeg ffprobe deno whisper-cli; do
             tool_path="${TOOLS_DIR}/${tool}"
             if [[ -f "$tool_path" ]]; then
               /usr/bin/codesign --force --sign "${EXPANDED_CODE_SIGN_IDENTITY}" --timestamp=none "$tool_path"

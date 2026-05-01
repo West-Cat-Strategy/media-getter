@@ -30,7 +30,8 @@ struct DownloadWorkspaceView: View {
                         .font(.headline)
 
                     TextField("https://example.com/video", text: downloadURLBinding)
-                        .textFieldStyle(.roundedBorder)
+                        .textFieldStyle(.plain)
+                        .studioInputStyle()
                         .accessibilityIdentifier(AccessibilityID.downloadURLField)
 
                     Picker("Authentication", selection: selectedAuthProfileBinding) {
@@ -57,21 +58,25 @@ struct DownloadWorkspaceView: View {
                         Button("Paste URL") {
                             appState.pasteURLFromClipboard()
                         }
+                        .buttonStyle(InteractiveButtonStyle())
 
                         Button(appState.downloadDraft.isProbing ? "Inspecting…" : "Inspect URL") {
                             Task { await appState.probeDownloadURL() }
                         }
                         .disabled(appState.downloadDraft.isProbing)
+                        .buttonStyle(InteractiveButtonStyle())
                         .accessibilityIdentifier(AccessibilityID.downloadInspectButton)
 
                         Button("Show Metadata") {
                             appState.inspectorMode = .metadata
                         }
                         .disabled(appState.downloadDraft.metadata == nil)
+                        .buttonStyle(InteractiveButtonStyle())
 
                         Button("Configure Auth…") {
                             isAuthSheetPresented = true
                         }
+                        .buttonStyle(InteractiveButtonStyle())
                         .accessibilityIdentifier(AccessibilityID.downloadConfigureAuthButton)
                     }
                 }
@@ -127,6 +132,8 @@ struct DownloadWorkspaceView: View {
                         }
 
                         TextField("Filename template", text: $appState.downloadDraft.filenameTemplate)
+                            .textFieldStyle(.plain)
+                            .studioInputStyle()
 
                         PathPickerRow(
                             title: "Destination folder",
@@ -142,6 +149,7 @@ struct DownloadWorkspaceView: View {
                             appState.downloadDraft.subtitleWorkflow.needsLocalRuntime && !appState.isTranscriptionReady
                                 || (appState.downloadDraft.subtitleWorkflow.burnInVideo && appState.downloadDraft.selectedPreset.audioOnly)
                         )
+                        .buttonStyle(InteractiveButtonStyle())
                         .accessibilityIdentifier(AccessibilityID.downloadQueueButton)
                     }
 
@@ -173,6 +181,7 @@ struct DownloadWorkspaceView: View {
                                 "Burn captions into exported video",
                                 isOn: $appState.downloadDraft.subtitleWorkflow.burnInVideo
                             )
+                            .toggleStyle(StudioToggleStyle())
 
                             if appState.downloadDraft.selectedPreset.audioOnly {
                                 Text("Caption burn-in only applies to video presets.")

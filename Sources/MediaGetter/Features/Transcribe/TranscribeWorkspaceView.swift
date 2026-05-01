@@ -28,12 +28,14 @@ struct TranscribeWorkspaceView: View {
                             appState.selectedSection = .transcribe
                             appState.openMediaFileForCurrentSection()
                         }
+                        .buttonStyle(InteractiveButtonStyle())
                         .accessibilityIdentifier(AccessibilityID.transcribeOpenButton)
 
                         if appState.transcribeDraft.inputURL != nil {
                             Button("Show Metadata") {
                                 appState.inspectorMode = .metadata
                             }
+                            .buttonStyle(InteractiveButtonStyle())
                         }
                     }
                 }
@@ -71,6 +73,7 @@ struct TranscribeWorkspaceView: View {
                         appState.enqueueTranscribe()
                     }
                     .disabled(appState.transcribeDraft.inputURL == nil || !appState.isTranscriptionReady)
+                    .buttonStyle(InteractiveButtonStyle())
                     .accessibilityIdentifier(AccessibilityID.transcribeQueueButton)
                 }
         }

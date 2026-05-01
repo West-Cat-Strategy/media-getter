@@ -111,6 +111,21 @@ vendor_yt_dlp() {
   cp -f "$thin_path" "$VENDOR_TOOLS_DIR/yt-dlp"
 }
 
+vendor_gallery_dl() {
+  local archive_path="$DOWNLOADS_DIR/gallery-dl_macos"
+  local thin_path="$ARTIFACTS_DIR/gallery-dl"
+
+  download_file \
+    "https://github.com/gdl-org/builds/releases/latest/download/gallery-dl_macos" \
+    "$archive_path"
+
+  /usr/bin/lipo "$archive_path" -thin arm64 -output "$thin_path"
+  chmod +x "$thin_path"
+  assert_arm64_binary "$thin_path"
+  assert_self_contained_binary "$thin_path"
+  cp -f "$thin_path" "$VENDOR_TOOLS_DIR/gallery-dl"
+}
+
 vendor_deno() {
   local archive_path="$DOWNLOADS_DIR/deno-v${DENO_VERSION}-aarch64-apple-darwin.zip"
   local extract_path="$ARTIFACTS_DIR/deno"
@@ -267,6 +282,7 @@ build_whisper() {
 
 main() {
   vendor_yt_dlp
+  vendor_gallery_dl
   vendor_deno
   build_x264
   build_lame
@@ -274,17 +290,22 @@ main() {
   build_whisper
 
   echo "Vendored Apple Silicon media tools:"
-  for tool in yt-dlp deno ffmpeg ffprobe whisper-cli; do
-    /usr/bin/file "$VENDOR_TOOLS_DIR/$tool"
+  for tool in yt-dlp gallery-dl deno ffmpeg ffprobe whisper-cli; do
+    if [[ -f "$VENDOR_TOOLS_DIR/$tool" ]]; then
+      /usr/bin/file "$VENDOR_TOOLS_DIR/$tool"
+    else
+      echo "Warning: $tool is missing from $VENDOR_TOOLS_DIR"
+    fi
   done
 
   echo
+  for tool in yt-dlp gallery-dl deno ffmpeg ffprobe whisper-cli; do
+    if [[ -f "$VENDOR_TOOLS_DIR/$tool" ]]; then
+       du -sh "$VENDOR_TOOLS_DIR/$tool"
+    fi
+  done
+
   du -sh \
-    "$VENDOR_TOOLS_DIR/yt-dlp" \
-    "$VENDOR_TOOLS_DIR/deno" \
-    "$VENDOR_TOOLS_DIR/ffmpeg" \
-    "$VENDOR_TOOLS_DIR/ffprobe" \
-    "$VENDOR_TOOLS_DIR/whisper-cli" \
     "$VENDOR_MODELS_DIR/ggml-${WHISPER_MODEL_NAME}.bin" \
     "$VENDOR_MODELS_DIR/ggml-${WHISPER_MODEL_NAME}-encoder.mlmodelc"
 }

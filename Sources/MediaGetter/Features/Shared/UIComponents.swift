@@ -24,6 +24,84 @@ struct WorkspaceContainer<Content: View>: View {
     }
 }
 
+struct InteractiveButtonStyle: ButtonStyle {
+    @State private var isHovering = false
+
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label
+            .opacity(configuration.isPressed ? 0.8 : (isHovering ? 0.95 : 1.0))
+            .scaleEffect(configuration.isPressed ? 0.97 : (isHovering ? 1.02 : 1.0))
+            .brightness(isHovering ? 0.05 : 0)
+            .animation(.studioSpring, value: isHovering)
+            .animation(.studioFast, value: configuration.isPressed)
+            .onHover { hovering in
+                isHovering = hovering
+            }
+    }
+}
+
+struct StudioInputModifier: ViewModifier {
+    @State private var isHovering = false
+    @FocusState private var isFocused: Bool
+
+    func body(content: Content) -> some View {
+        content
+            .padding(.horizontal, 12)
+            .padding(.vertical, 8)
+            .background(
+                RoundedRectangle(cornerRadius: 10, style: .continuous)
+                    .fill(Color.studioSurface.opacity(0.5))
+            )
+            .overlay(
+                RoundedRectangle(cornerRadius: 10, style: .continuous)
+                    .stroke(isFocused ? Color.accentColor : (isHovering ? Color.studioBorderHover : Color.studioBorder), lineWidth: 1.5)
+            )
+            .animation(.studioFast, value: isHovering)
+            .animation(.studioFast, value: isFocused)
+            .onHover { hovering in
+                isHovering = hovering
+            }
+            .focused($isFocused)
+    }
+}
+
+extension View {
+    func studioInputStyle() -> some View {
+        self.modifier(StudioInputModifier())
+    }
+}
+
+struct StudioToggleStyle: ToggleStyle {
+    @State private var isHovering = false
+
+    func makeBody(configuration: Configuration) -> some View {
+        HStack {
+            configuration.label
+            Spacer()
+            Rectangle()
+                .fill(configuration.isOn ? Color.accentColor : Color.secondary.opacity(0.3))
+                .frame(width: 44, height: 24)
+                .overlay(
+                    Circle()
+                        .fill(Color.white)
+                        .padding(2)
+                        .offset(x: configuration.isOn ? 10 : -10)
+                )
+                .cornerRadius(12)
+                .onTapGesture {
+                    withAnimation(.studioSpring) {
+                        configuration.isOn.toggle()
+                    }
+                }
+                .scaleEffect(isHovering ? 1.05 : 1.0)
+                .animation(.studioSpring, value: isHovering)
+                .onHover { hovering in
+                    isHovering = hovering
+                }
+        }
+    }
+}
+
 struct WrappingHStack: Layout {
     var horizontalSpacing: CGFloat = 8
     var verticalSpacing: CGFloat = 8
@@ -90,14 +168,44 @@ struct AdaptiveButtonRow<Content: View>: View {
     }
 }
 
+struct SidebarButtonStyle: ButtonStyle {
+    let isSelected: Bool
+    @State private var isHovering = false
+
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label
+            .background(
+                RoundedRectangle(cornerRadius: 18, style: .continuous)
+                    .fill(isSelected ? Color.white.opacity(0.12) : (isHovering ? Color.white.opacity(0.06) : Color.clear))
+            )
+            .overlay(
+                RoundedRectangle(cornerRadius: 18, style: .continuous)
+                    .strokeBorder(
+                        isSelected ? Color.white.opacity(0.18) : (isHovering ? Color.white.opacity(0.1) : Color.white.opacity(0.05)),
+                        lineWidth: 1
+                    )
+            )
+            .scaleEffect(isHovering ? 1.02 : 1.0)
+            .animation(.studioSpring, value: isHovering)
+            .animation(.studioFast, value: configuration.isPressed)
+            .onHover { hovering in
+                isHovering = hovering
+            }
+    }
+}
+
 struct WorkspaceHeader: View {
     let title: String
     let subtitle: String
 
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
+            Text("Workspace")
+                .font(.system(.caption, design: .monospaced).weight(.semibold))
+                .foregroundStyle(.secondary)
+                .textCase(.uppercase)
             Text(title)
-                .font(.largeTitle.weight(.semibold))
+                .font(.system(size: 30, weight: .semibold, design: .rounded))
             Text(subtitle)
                 .foregroundStyle(.secondary)
         }
@@ -128,7 +236,7 @@ struct WorkspaceDropOverlay: View {
             "Drop to queue transcription"
         case .trim:
             "Drop to open clip"
-        case .download, .convert, .queue, .history:
+        case .download, .xMedia, .convert, .queue, .history:
             "Drop to queue"
         }
     }
@@ -139,7 +247,7 @@ struct WorkspaceDropOverlay: View {
             "text.bubble"
         case .trim:
             "scissors"
-        case .download, .convert, .queue, .history:
+        case .download, .xMedia, .convert, .queue, .history:
             "tray.and.arrow.down"
         }
     }
@@ -147,6 +255,7 @@ struct WorkspaceDropOverlay: View {
 
 struct StudioCard<Content: View>: View {
     @ViewBuilder var content: Content
+    @State private var isHovering = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
@@ -155,12 +264,24 @@ struct StudioCard<Content: View>: View {
         .padding(20)
         .background(
             RoundedRectangle(cornerRadius: 18, style: .continuous)
-                .fill(.regularMaterial)
+                .fill(
+                    LinearGradient(
+                        colors: [Color.studioSurface.opacity(0.96), Color.studioSurface.opacity(0.92)],
+                        startPoint: .topLeading,
+                        endPoint: .bottomTrailing
+                    )
+                )
         )
         .overlay(
             RoundedRectangle(cornerRadius: 18, style: .continuous)
-                .strokeBorder(.quaternary, lineWidth: 1)
+                .strokeBorder(isHovering ? Color.white.opacity(0.15) : Color.white.opacity(0.09), lineWidth: 1)
         )
+        .shadow(color: .black.opacity(isHovering ? 0.25 : 0.16), radius: isHovering ? 24 : 18, y: isHovering ? 12 : 10)
+        .scaleEffect(isHovering ? 1.005 : 1.0)
+        .animation(.studioSpring, value: isHovering)
+        .onHover { hovering in
+            isHovering = hovering
+        }
     }
 }
 
@@ -186,14 +307,14 @@ struct PresetTile: View {
             .padding(16)
             .background(
                 RoundedRectangle(cornerRadius: 16, style: .continuous)
-                    .fill(isSelected ? Color.accentColor.opacity(0.16) : Color.secondary.opacity(0.08))
+                    .fill(isSelected ? Color.accentColor.opacity(0.22) : Color.white.opacity(0.05))
             )
             .overlay(
                 RoundedRectangle(cornerRadius: 16, style: .continuous)
-                    .stroke(isSelected ? Color.accentColor : Color.clear, lineWidth: 1.5)
+                    .stroke(isSelected ? Color.accentColor : Color.white.opacity(0.06), lineWidth: 1.5)
             )
         }
-        .buttonStyle(.plain)
+        .buttonStyle(InteractiveButtonStyle())
     }
 }
 
@@ -294,6 +415,7 @@ struct PathPickerRow: View {
                 pathDescription
                 chooseButton
             }
+            .buttonStyle(InteractiveButtonStyle())
         }
     }
 
@@ -338,14 +460,17 @@ struct SubtitleArtifactSection: View {
                             Button("Preview") {
                                 onPreview(artifact)
                             }
+                            .buttonStyle(InteractiveButtonStyle())
 
                             Button("Open") {
                                 onOpen(artifact)
                             }
+                            .buttonStyle(InteractiveButtonStyle())
 
                             Button("Reveal") {
                                 onReveal(artifact)
                             }
+                            .buttonStyle(InteractiveButtonStyle())
                         }
                     }
                 }
@@ -364,7 +489,7 @@ struct StatusBadge: View {
             .padding(.vertical, 4)
             .background(
                 Capsule()
-                    .fill(Color(nsColor: status.tint).opacity(0.15))
+                    .fill(Color(nsColor: status.tint).opacity(0.18))
             )
             .foregroundStyle(Color(nsColor: status.tint))
     }
