@@ -1074,7 +1074,7 @@ struct AppAlert: Identifiable, Equatable {
     var message: String
 }
 
-struct ThumbnailFrame: Identifiable {
+struct ThumbnailFrame: Identifiable, @unchecked Sendable {
     var id: UUID = UUID()
     var time: TimeInterval
     var image: NSImage
