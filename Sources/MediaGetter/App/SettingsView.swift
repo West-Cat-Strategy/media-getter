@@ -80,7 +80,7 @@ struct SettingsView: View {
                 }
                 .padding(.vertical, 4)
 
-                HStack {
+                AdaptiveButtonRow {
                     Button(appUpdateManager.primaryUpdateActionTitle) {
                         appUpdateManager.performPrimaryUpdateAction()
                     }
@@ -90,6 +90,14 @@ struct SettingsView: View {
                         Button("Cancel") {
                             appUpdateManager.cancelUpdateSession()
                         }
+                        .accessibilityIdentifier(AccessibilityID.updateCancelButton)
+                    }
+
+                    if appUpdateManager.canRetryUpdateSession {
+                        Button("Retry") {
+                            appUpdateManager.retryUpdateSession()
+                        }
+                        .accessibilityIdentifier(AccessibilityID.updateRetryButton)
                     }
 
                     if let dismissPendingUpdateTitle = appUpdateManager.dismissPendingUpdateTitle,
@@ -108,23 +116,15 @@ struct SettingsView: View {
             }
 
             Section("Defaults") {
-                HStack(alignment: .firstTextBaseline) {
-                    VStack(alignment: .leading, spacing: 4) {
-                        Text("Default download folder")
-                        Text(appState.preferencesStore.defaultDownloadFolderPath)
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                            .lineLimit(2)
-                    }
-
-                    Spacer()
-
-                    Button("Choose Folder") {
+                PathPickerRow(
+                    title: "Default download folder",
+                    path: appState.preferencesStore.defaultDownloadFolderPath
+                ) {
                         appState.chooseDefaultDownloadFolder()
-                    }
                 }
 
                 Toggle("Overwrite existing files", isOn: $appState.preferencesStore.overwriteExisting)
+                    .accessibilityIdentifier(AccessibilityID.settingsOverwriteToggle)
 
                 TextField("Filename template", text: $appState.preferencesStore.filenameTemplate)
 

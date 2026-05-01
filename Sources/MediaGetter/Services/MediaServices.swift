@@ -56,6 +56,78 @@ private extension String {
     }
 }
 
+private struct JobStagingWorkspace {
+    let url: URL
+    let fileManager: FileManager
+
+    init(label: String, fileManager: FileManager = .default) throws {
+        self.fileManager = fileManager
+        self.url = fileManager.temporaryDirectory
+            .appendingPathComponent("MediaGetterJobs", isDirectory: true)
+            .appendingPathComponent("\(label)-\(UUID().uuidString)", isDirectory: true)
+        try fileManager.createDirectory(at: url, withIntermediateDirectories: true)
+    }
+
+    func cleanup() {
+        try? fileManager.removeItem(at: url)
+    }
+
+    func stagedURL(for finalURL: URL) -> URL {
+        url.appendingPathComponent(finalURL.lastPathComponent)
+    }
+
+    func commitFile(from stagedURL: URL, to destinationURL: URL, overwriteExisting: Bool) throws -> URL {
+        try fileManager.createDirectory(
+            at: destinationURL.deletingLastPathComponent(),
+            withIntermediateDirectories: true
+        )
+
+        if fileManager.fileExists(atPath: destinationURL.path) {
+            guard overwriteExisting else {
+                throw ProcessRunnerError.launchFailed("File already exists at \(destinationURL.path).")
+            }
+
+            _ = try fileManager.replaceItemAt(destinationURL, withItemAt: stagedURL)
+        } else {
+            try fileManager.moveItem(at: stagedURL, to: destinationURL)
+        }
+
+        return destinationURL
+    }
+
+    func commitArtifacts(
+        _ artifacts: [JobArtifact],
+        to destinationDirectory: URL,
+        overwriteExisting: Bool
+    ) throws -> [JobArtifact] {
+        try fileManager.createDirectory(at: destinationDirectory, withIntermediateDirectories: true)
+
+        if !overwriteExisting {
+            for artifact in artifacts {
+                let destinationURL = destinationDirectory.appendingPathComponent(artifact.url.lastPathComponent)
+                if fileManager.fileExists(atPath: destinationURL.path) {
+                    throw ProcessRunnerError.launchFailed("File already exists at \(destinationURL.path).")
+                }
+            }
+        }
+
+        return try artifacts.map { artifact in
+            let destinationURL = destinationDirectory.appendingPathComponent(artifact.url.lastPathComponent)
+            let committedURL = try commitFile(
+                from: artifact.url,
+                to: destinationURL,
+                overwriteExisting: overwriteExisting
+            )
+            return JobArtifact(
+                kind: artifact.kind,
+                url: committedURL,
+                displayName: artifact.displayName,
+                isPrimary: artifact.isPrimary
+            )
+        }
+    }
+}
+
 final class DownloadProbeService: @unchecked Sendable {
     private let toolchainManager: ToolchainManager
     private let processRunner: ProcessRunner
@@ -233,15 +305,20 @@ final class DownloadService: @unchecked Sendable {
         let toolURL = try toolchainManager.executableURL(for: .ytDlp)
         let denoURL = try toolchainManager.executableURL(for: .deno)
         let toolsDirectoryURL = try toolchainManager.toolsDirectoryURL()
+        let staging = try JobStagingWorkspace(label: "download", fileManager: fileManager)
+        defer { staging.cleanup() }
+        var stagedRequest = request
+        stagedRequest.destinationDirectory = staging.url
         let command = buildCommand(
-            for: request,
+            for: stagedRequest,
             toolURL: toolURL,
             denoURL: denoURL,
             toolsDirectoryURL: toolsDirectoryURL
         )
-        try? fileManager.createDirectory(at: request.destinationDirectory, withIntermediateDirectories: true)
-        let beforeSnapshot = snapshotDirectory(request.destinationDirectory)
+        let beforeSnapshot = snapshotDirectory(staging.url)
 
+        await onEvent(.stage(.downloading))
+        await onEvent(.phase("Downloading media"))
         let result = try await processRunner.run(command) { line in
             Task {
                 await onEvent(.log(line.text))
@@ -263,9 +340,9 @@ final class DownloadService: @unchecked Sendable {
             }
         }
 
-        let afterSnapshot = snapshotDirectory(request.destinationDirectory)
+        let afterSnapshot = snapshotDirectory(staging.url)
 
-        let discoveredOutputURL = result.combinedOutput
+        let stagedOutputURL = result.combinedOutput
             .split(whereSeparator: \.isNewline)
             .map(String.init)
             .reversed()
@@ -279,17 +356,24 @@ final class DownloadService: @unchecked Sendable {
             }
             .first
 
-        if let discoveredOutputURL {
-            await onEvent(.destination(discoveredOutputURL))
-        }
-
         let artifacts = detectArtifacts(
             before: beforeSnapshot,
             after: afterSnapshot,
-            primaryOutputURL: discoveredOutputURL
+            primaryOutputURL: stagedOutputURL
         )
+        let committedArtifacts = try staging.commitArtifacts(
+            artifacts,
+            to: request.destinationDirectory,
+            overwriteExisting: request.overwriteExisting
+        )
+        if let outputURL = committedArtifacts.first(where: \.isPrimary)?.url ?? committedArtifacts.first?.url {
+            await onEvent(.destination(outputURL))
+        }
 
-        return JobResult(artifacts: artifacts, summary: discoveredOutputURL?.lastPathComponent ?? "Download finished")
+        return JobResult(
+            artifacts: committedArtifacts,
+            summary: committedArtifacts.first(where: \.isPrimary)?.url.lastPathComponent ?? "Download finished"
+        )
     }
 
     func snapshotDirectory(_ directoryURL: URL) -> [DirectorySnapshotEntry] {
@@ -489,9 +573,16 @@ final class TranscodeService: @unchecked Sendable {
         } else {
             inspectedMetadata = try await inspectLocalMedia(at: request.inputURL)
         }
-        let (command, outputURL) = buildCommand(for: request, toolURL: ffmpegURL)
+        let staging = try JobStagingWorkspace(label: "convert", fileManager: fileManager)
+        defer { staging.cleanup() }
+        var stagedRequest = request
+        stagedRequest.destinationDirectory = staging.url
+        let (command, stagedOutputURL) = buildCommand(for: stagedRequest, toolURL: ffmpegURL)
+        let outputURL = Self.outputURL(for: request)
         let duration = inspectedMetadata.duration ?? 0
 
+        await onEvent(.stage(.transcoding))
+        await onEvent(.phase("Transcoding \(request.preset.title.lowercased())"))
         _ = try await processRunner.run(command) { line in
             Task {
                 await onEvent(.log(line.text))
@@ -509,8 +600,14 @@ final class TranscodeService: @unchecked Sendable {
             }
         }
 
-        await onEvent(.destination(outputURL))
-        return JobResult(outputURL: outputURL, summary: outputURL.lastPathComponent)
+        await onEvent(.stage(.writingOutput))
+        let committedURL = try staging.commitFile(
+            from: stagedOutputURL,
+            to: outputURL,
+            overwriteExisting: request.overwriteExisting
+        )
+        await onEvent(.destination(committedURL))
+        return JobResult(outputURL: committedURL, summary: committedURL.lastPathComponent)
     }
 
     func buildSubtitleNormalizationCommand(
@@ -542,28 +639,43 @@ final class TranscodeService: @unchecked Sendable {
 
         if fileManager.fileExists(atPath: outputURL.path) {
             if overwriteExisting {
-                try? fileManager.removeItem(at: outputURL)
+                // Replace only after the staged normalization succeeds.
             } else {
                 throw ProcessRunnerError.launchFailed("Subtitle file already exists at \(outputURL.path).")
             }
         }
 
+        let staging = try JobStagingWorkspace(label: "subtitle-normalize", fileManager: fileManager)
+        defer { staging.cleanup() }
+        let stagedOutputURL = staging.stagedURL(for: outputURL)
+
+        await onEvent(.stage(.normalizingSubtitles))
         await onEvent(.phase("Writing .srt subtitles"))
         if subtitleURL.pathExtension.lowercased() == "srt" {
-            try fileManager.copyItem(at: subtitleURL, to: outputURL)
+            try fileManager.copyItem(at: subtitleURL, to: stagedOutputURL)
+            let committedURL = try staging.commitFile(
+                from: stagedOutputURL,
+                to: outputURL,
+                overwriteExisting: overwriteExisting
+            )
             await onEvent(.progress(1))
-            return outputURL
+            return committedURL
         }
 
         let ffmpegURL = try toolchainManager.executableURL(for: .ffmpeg)
-        let command = buildSubtitleNormalizationCommand(inputURL: subtitleURL, outputURL: outputURL, toolURL: ffmpegURL)
+        let command = buildSubtitleNormalizationCommand(inputURL: subtitleURL, outputURL: stagedOutputURL, toolURL: ffmpegURL)
 
         _ = try await processRunner.run(command) { line in
             Task { await onEvent(.log(line.text)) }
         }
 
+        let committedURL = try staging.commitFile(
+            from: stagedOutputURL,
+            to: outputURL,
+            overwriteExisting: overwriteExisting
+        )
         await onEvent(.progress(1))
-        return outputURL
+        return committedURL
     }
 
     func buildBurnedSubtitleCommand(
@@ -604,10 +716,9 @@ final class TranscodeService: @unchecked Sendable {
     ) async throws -> URL {
         let ffmpegURL = try toolchainManager.executableURL(for: .ffmpeg)
         let duration = (try? await inspectLocalMedia(at: mediaURL))?.duration ?? 0
-        let temporaryOutputURL = Self.temporaryBurnedMediaURL(for: mediaURL)
-        if fileManager.fileExists(atPath: temporaryOutputURL.path) {
-            try? fileManager.removeItem(at: temporaryOutputURL)
-        }
+        let staging = try JobStagingWorkspace(label: "caption-burn", fileManager: fileManager)
+        defer { staging.cleanup() }
+        let temporaryOutputURL = staging.stagedURL(for: Self.temporaryBurnedMediaURL(for: mediaURL))
 
         let command = buildBurnedSubtitleCommand(
             inputURL: mediaURL,
@@ -618,6 +729,8 @@ final class TranscodeService: @unchecked Sendable {
         )
 
         do {
+            await onEvent(.stage(.burningCaptions))
+            await onEvent(.phase("Burning captions into video"))
             _ = try await processRunner.run(command) { line in
                 Task {
                     await onEvent(.log(line.text))
@@ -639,9 +752,6 @@ final class TranscodeService: @unchecked Sendable {
             await onEvent(.progress(1))
             return mediaURL
         } catch {
-            if fileManager.fileExists(atPath: temporaryOutputURL.path) {
-                try? fileManager.removeItem(at: temporaryOutputURL)
-            }
             throw error
         }
     }
@@ -690,10 +800,16 @@ final class TranscodeService: @unchecked Sendable {
 final class TrimService: @unchecked Sendable {
     private let toolchainManager: ToolchainManager
     private let processRunner: ProcessRunner
+    private let fileManager: FileManager
 
-    init(toolchainManager: ToolchainManager, processRunner: ProcessRunner) {
+    init(
+        toolchainManager: ToolchainManager,
+        processRunner: ProcessRunner,
+        fileManager: FileManager = .default
+    ) {
         self.toolchainManager = toolchainManager
         self.processRunner = processRunner
+        self.fileManager = fileManager
     }
 
     func makePlan(request: TrimRequest, metadata: MediaMetadata?) -> TrimPlan {
@@ -766,8 +882,15 @@ final class TrimService: @unchecked Sendable {
         onEvent: @escaping @Sendable (JobEvent) async -> Void
     ) async throws -> JobResult {
         let ffmpegURL = try toolchainManager.executableURL(for: .ffmpeg)
-        let (command, outputURL, plan) = buildCommand(for: request, metadata: metadata, toolURL: ffmpegURL)
+        let staging = try JobStagingWorkspace(label: "trim", fileManager: fileManager)
+        defer { staging.cleanup() }
+        var stagedRequest = request
+        stagedRequest.destinationDirectory = staging.url
+        let (command, stagedOutputURL, plan) = buildCommand(for: stagedRequest, metadata: metadata, toolURL: ffmpegURL)
+        let outputURL = Self.outputURL(for: request)
 
+        await onEvent(.stage(.trimming))
+        await onEvent(.phase(plan.strategy == .streamCopy ? "Copying clip" : "Encoding clip"))
         _ = try await processRunner.run(command) { line in
             Task {
                 await onEvent(.log(line.text))
@@ -782,8 +905,14 @@ final class TrimService: @unchecked Sendable {
             }
         }
 
-        await onEvent(.destination(outputURL))
-        return JobResult(outputURL: outputURL, summary: "\(outputURL.lastPathComponent) • \(plan.strategy.rawValue)")
+        await onEvent(.stage(.writingOutput))
+        let committedURL = try staging.commitFile(
+            from: stagedOutputURL,
+            to: outputURL,
+            overwriteExisting: request.overwriteExisting
+        )
+        await onEvent(.destination(committedURL))
+        return JobResult(outputURL: committedURL, summary: "\(committedURL.lastPathComponent) • \(plan.strategy.rawValue)")
     }
 
     static func outputURL(for request: TrimRequest) -> URL {
@@ -815,9 +944,10 @@ final class TranscriptionService: @unchecked Sendable {
     func buildExtractionCommand(
         for request: TranscribeRequest,
         metadata: MediaMetadata?,
-        toolURL: URL
+        toolURL: URL,
+        temporaryDirectoryURL: URL? = nil
     ) -> (ProcessCommand, URL) {
-        let outputURL = Self.temporaryAudioURL(for: request, in: temporaryDirectory)
+        let outputURL = Self.temporaryAudioURL(for: request, in: temporaryDirectoryURL ?? temporaryDirectory)
         var arguments = ["-hide_banner", "-y", "-i", request.inputURL.path]
 
         if metadata?.videoCodec != nil {
@@ -910,30 +1040,34 @@ final class TranscriptionService: @unchecked Sendable {
             outputFormat: outputFormat,
             overwriteExisting: overwriteExisting
         )
-        let tempAudioURL = Self.temporaryAudioURL(for: inputURL, in: temporaryDirectory)
         let isSubtitleOutput = outputFormat.isSubtitleFormat
         let outputLabel = isSubtitleOutput ? "Subtitle file" : "Transcript"
 
         if fileManager.fileExists(atPath: outputURL.path) {
             if overwriteExisting {
-                try? fileManager.removeItem(at: outputURL)
+                // Replace only after the staged transcription succeeds.
             } else {
                 throw ProcessRunnerError.launchFailed("\(outputLabel) already exists at \(outputURL.path).")
             }
         }
 
-        try? fileManager.createDirectory(at: outputURL.deletingLastPathComponent(), withIntermediateDirectories: true)
-        try? fileManager.createDirectory(at: temporaryDirectory, withIntermediateDirectories: true)
+        let staging = try JobStagingWorkspace(label: isSubtitleOutput ? "subtitles" : "transcribe", fileManager: fileManager)
+        defer { staging.cleanup() }
+        let stagedOutputURL = staging.stagedURL(for: outputURL)
 
         var shouldRemoveOutputOnFailure = false
-        defer {
-            try? fileManager.removeItem(at: tempAudioURL)
-        }
 
         do {
+            await onEvent(.stage(isSubtitleOutput ? .generatingSubtitles : .preparing))
             await onEvent(.phase(isSubtitleOutput ? "Preparing subtitles" : "Preparing audio"))
-            let (extractionCommand, normalizedAudioURL) = buildExtractionCommand(for: request, metadata: metadata, toolURL: ffmpegURL)
+            let (extractionCommand, normalizedAudioURL) = buildExtractionCommand(
+                for: request,
+                metadata: metadata,
+                toolURL: ffmpegURL,
+                temporaryDirectoryURL: staging.url
+            )
 
+            await onEvent(.stage(.extractingAudio))
             await onEvent(.phase("Extracting audio"))
             _ = try await processRunner.run(extractionCommand) { line in
                 Task {
@@ -953,13 +1087,14 @@ final class TranscriptionService: @unchecked Sendable {
 
             let transcriptionCommand = buildTranscriptionCommand(
                 normalizedAudioURL: normalizedAudioURL,
-                outputURL: outputURL,
+                outputURL: stagedOutputURL,
                 outputFormat: outputFormat,
                 toolURL: whisperURL,
                 modelURL: modelURL
             )
 
             shouldRemoveOutputOnFailure = true
+            await onEvent(.stage(isSubtitleOutput ? .generatingSubtitles : .transcribing))
             await onEvent(.phase(isSubtitleOutput ? "Generating subtitles" : "Transcribing"))
             _ = try await processRunner.run(transcriptionCommand) { line in
                 Task {
@@ -972,17 +1107,23 @@ final class TranscriptionService: @unchecked Sendable {
                 }
             }
 
+            await onEvent(.stage(.writingOutput))
             await onEvent(.phase(isSubtitleOutput ? "Writing subtitles" : "Writing transcript"))
+            let committedURL = try staging.commitFile(
+                from: stagedOutputURL,
+                to: outputURL,
+                overwriteExisting: overwriteExisting
+            )
             await onEvent(.progress(1))
-            await onEvent(.destination(outputURL))
+            await onEvent(.destination(committedURL))
             return JobResult(
-                outputURL: outputURL,
+                outputURL: committedURL,
                 summary: outputURL.lastPathComponent,
                 artifactKind: outputFormat.artifactKind
             )
         } catch {
-            if shouldRemoveOutputOnFailure, fileManager.fileExists(atPath: outputURL.path) {
-                try? fileManager.removeItem(at: outputURL)
+            if shouldRemoveOutputOnFailure, fileManager.fileExists(atPath: stagedOutputURL.path) {
+                try? fileManager.removeItem(at: stagedOutputURL)
             }
 
             throw error

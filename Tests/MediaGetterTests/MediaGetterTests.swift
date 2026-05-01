@@ -2,6 +2,23 @@ import Foundation
 import XCTest
 @testable import MediaGetter
 
+private final class LockedProcessOutputLines: @unchecked Sendable {
+    private let lock = NSLock()
+    private var lines: [ProcessOutputLine] = []
+
+    func append(_ line: ProcessOutputLine) {
+        lock.lock()
+        lines.append(line)
+        lock.unlock()
+    }
+
+    func snapshot() -> [ProcessOutputLine] {
+        lock.lock()
+        defer { lock.unlock() }
+        return lines
+    }
+}
+
 final class MediaGetterTests: XCTestCase {
     @MainActor
     func testAppUpdateManagerDisabledModeIsNoOp() {
@@ -110,6 +127,128 @@ final class MediaGetterTests: XCTestCase {
         XCTAssertEqual(ToolchainManager.parseVersion(tool: .whisperCLI, output: "usage: whisper-cli\n"), "Installed")
     }
 
+    func testProcessRunnerCapturesOutputWithoutTrailingNewline() async throws {
+        let runner = ProcessRunner()
+        let streamedLines = LockedProcessOutputLines()
+
+        let result = try await runner.run(
+            ProcessCommand(
+                executableURL: URL(fileURLWithPath: "/bin/sh"),
+                arguments: ["-c", "printf 'hello'; printf 'warn' >&2"]
+            ),
+            onOutput: { streamedLines.append($0) }
+        )
+
+        XCTAssertEqual(result.stdout, "hello")
+        XCTAssertEqual(result.stderr, "warn")
+        let normalizedLines = streamedLines.snapshot().sorted {
+            "\($0.stream):\($0.text)" < "\($1.stream):\($1.text)"
+        }
+        XCTAssertEqual(
+            normalizedLines,
+            [
+                ProcessOutputLine(stream: .stderr, text: "warn"),
+                ProcessOutputLine(stream: .stdout, text: "hello"),
+            ]
+        )
+    }
+
+    func testProcessRunnerCancellationTerminatesAndThrowsCancellation() async throws {
+        let root = try makeTemporaryDirectory()
+        let markerURL = root.appendingPathComponent("started")
+        let runner = ProcessRunner()
+        let task = Task {
+            try await runner.run(
+                ProcessCommand(
+                    executableURL: URL(fileURLWithPath: "/bin/sh"),
+                    arguments: [
+                        "-c",
+                        "touch '\(markerURL.path)'; sleep 20"
+                    ]
+                )
+            )
+        }
+
+        try await waitUntilFileExists(markerURL)
+        task.cancel()
+
+        do {
+            _ = try await task.value
+            XCTFail("Expected cancellation.")
+        } catch is CancellationError {
+            // Expected.
+        }
+    }
+
+    @MainActor
+    func testQueueCancelRunningJobTransitionsThroughCancelling() async throws {
+        let store = QueueStore()
+        let didStart = expectation(description: "job started")
+        let request = makeQueueJobRequest()
+
+        store.setExecutor { _, _ in
+            didStart.fulfill()
+            try await Task.sleep(nanoseconds: 20_000_000_000)
+            return JobResult(outputURL: nil, summary: "Finished")
+        }
+
+        store.enqueue(request)
+        await fulfillment(of: [didStart], timeout: 2)
+
+        store.cancel(jobID: request.id)
+
+        XCTAssertEqual(store.jobs.count, 1)
+        XCTAssertEqual(store.jobs.first?.status, .cancelling)
+        XCTAssertEqual(store.jobs.first?.stage, .cancelling)
+        XCTAssertTrue(store.jobs.first?.phase.contains("Cancelling") == true)
+    }
+
+    @MainActor
+    func testQueueRetryReusesSameRowAndPreservesRequest() {
+        let store = QueueStore()
+        let request = makeQueueJobRequest()
+        store.enqueue(request)
+        store.cancel(jobID: request.id)
+
+        XCTAssertEqual(store.jobs.first?.status, .cancelled)
+
+        store.retry(jobID: request.id)
+
+        XCTAssertEqual(store.jobs.count, 1)
+        XCTAssertEqual(store.jobs.first?.id, request.id)
+        XCTAssertEqual(store.jobs.first?.request, request)
+        XCTAssertEqual(store.jobs.first?.status, .pending)
+        XCTAssertEqual(store.jobs.first?.stage, .queued)
+        XCTAssertEqual(store.jobs.first?.progress, 0)
+        XCTAssertNil(store.jobs.first?.completedAt)
+        XCTAssertTrue(store.jobs.first?.logs.isEmpty == true)
+    }
+
+    @MainActor
+    func testAppUpdateManagerExposesRetryAfterFailure() {
+        let updater = FakeAppUpdater(
+            canCheckForUpdates: true,
+            automaticallyChecksForUpdates: false,
+            automaticallyDownloadsUpdates: false,
+            allowsAutomaticUpdates: true
+        )
+        let manager = AppUpdateManager(
+            updater: updater,
+            updaterEnabledOverride: true
+        )
+
+        manager.markFailedUpdateForTesting(action: .check, message: "Network failed")
+
+        XCTAssertEqual(manager.updatePhase, .failed)
+        XCTAssertTrue(manager.canRetryUpdateSession)
+
+        manager.retryUpdateSession()
+
+        XCTAssertEqual(updater.checkForUpdatesCallCount, 1)
+        XCTAssertEqual(manager.updatePhase, .checking)
+        XCTAssertFalse(manager.canRetryUpdateSession)
+    }
+
     func testToolchainParsesArchitectureAndDependencyPolicies() {
         XCTAssertEqual(
             ToolchainManager.parseArchitecture(fileDescription: "Mach-O 64-bit executable arm64"),
@@ -122,6 +261,27 @@ final class MediaGetterTests: XCTestCase {
         XCTAssertEqual(
             ToolchainManager.parseArchitecture(fileDescription: "Python script text executable"),
             .script
+        )
+        XCTAssertTrue(ToolBinaryArchitecture.arm64.isAppleSiliconReady)
+        XCTAssertTrue(ToolBinaryArchitecture.universal.isAppleSiliconReady)
+        XCTAssertFalse(ToolBinaryArchitecture.x86_64.isAppleSiliconReady)
+        XCTAssertEqual(
+            ToolchainManager.parseDependencyPaths(
+                otoolOutput: """
+                Vendor/Tools/yt-dlp (architecture x86_64):
+                \t/usr/lib/libSystem.B.dylib (compatibility version 1.0.0, current version 1351.0.0)
+                \t/usr/lib/libz.1.dylib (compatibility version 1.0.0, current version 1.2.12)
+                Vendor/Tools/yt-dlp (architecture arm64):
+                \t/usr/lib/libSystem.B.dylib (compatibility version 1.0.0, current version 1351.0.0)
+                \t/usr/lib/libz.1.dylib (compatibility version 1.0.0, current version 1.2.12)
+                """
+            ),
+            [
+                "/usr/lib/libSystem.B.dylib",
+                "/usr/lib/libz.1.dylib",
+                "/usr/lib/libSystem.B.dylib",
+                "/usr/lib/libz.1.dylib",
+            ]
         )
 
         XCTAssertTrue(ToolchainManager.isAllowedDependencyPath("/System/Library/Frameworks/Foundation.framework/Versions/C/Foundation"))
@@ -407,11 +567,16 @@ final class MediaGetterTests: XCTestCase {
 
         XCTAssertEqual(appState.downloadDraft.selectedAuthProfileID, defaultProfile.id)
 
-        appState.downloadDraft.urlString = "https://example.com/watch?v=123"
+        appState.updateDownloadURL("https://example.com/watch?v=123")
         appState.downloadDraft.subtitleWorkflow = .off(format: .srt)
-        appState.downloadDraft.metadata = MediaMetadata(
-            source: .remote("https://example.com/watch?v=123"),
-            title: "Example"
+        appState.applySuccessfulDownloadProbe(
+            metadata: MediaMetadata(
+                source: .remote("https://example.com/watch?v=123"),
+                title: "Example"
+            ),
+            resolvedAuth: try authStore.resolvedAuth(for: defaultProfile.id),
+            title: "Inspection complete",
+            message: "Ready to queue"
         )
 
         appState.enqueueDownload()
@@ -424,6 +589,200 @@ final class MediaGetterTests: XCTestCase {
             request.resolvedAuth,
             .browser(BrowserDownloadAuthConfiguration(browser: .safari, profile: nil, container: nil))
         )
+    }
+
+    @MainActor
+    func testDownloadProbeInvalidatesWhenURLChanges() throws {
+        let appState = try makeIsolatedAppState()
+        appState.updateDownloadURL("https://example.com/watch?v=123")
+        appState.applySuccessfulDownloadProbe(
+            metadata: makeDownloadMetadata(urlString: "https://example.com/watch?v=123"),
+            resolvedAuth: nil,
+            title: "Inspection complete",
+            message: "Ready to queue"
+        )
+
+        XCTAssertNotNil(appState.downloadDraft.metadata)
+        XCTAssertEqual(appState.downloadDraft.selectedFormatID, "137+140")
+        XCTAssertEqual(appState.downloadDraft.lastProbedURLString, "https://example.com/watch?v=123")
+
+        appState.updateDownloadURL("https://example.com/watch?v=456")
+
+        XCTAssertNil(appState.downloadDraft.metadata)
+        XCTAssertEqual(appState.downloadDraft.selectedFormatID, DownloadDraft.automaticFormatID)
+        XCTAssertNil(appState.downloadDraft.lastProbedURLString)
+        XCTAssertNil(appState.downloadDraft.probeStatusTitle)
+        XCTAssertNil(appState.downloadDraft.probeStatusMessage)
+    }
+
+    @MainActor
+    func testDownloadProbeInvalidatesWhenAuthChanges() throws {
+        let root = try makeTemporaryDirectory()
+        let secretStore = InMemorySecretStore()
+        let authStore = AuthProfileStore(
+            persistenceURL: root.appendingPathComponent("auth_profiles.json"),
+            profilesDirectoryURL: root.appendingPathComponent("AuthProfiles", isDirectory: true),
+            secretStore: secretStore
+        )
+        let firstProfile = try authStore.saveProfile(
+            from: DownloadAuthProfileDraft(
+                name: "Browser One",
+                strategyKind: .browser,
+                browser: .safari,
+                markAsDefault: false
+            )
+        )
+        let secondProfile = try authStore.saveProfile(
+            from: DownloadAuthProfileDraft(
+                name: "Browser Two",
+                strategyKind: .browser,
+                browser: .chrome,
+                markAsDefault: false
+            )
+        )
+        let appState = try makeIsolatedAppState(root: root, authStore: authStore)
+
+        appState.updateDownloadURL("https://example.com/watch?v=123")
+        appState.updateSelectedDownloadAuthProfileID(firstProfile.id)
+        appState.applySuccessfulDownloadProbe(
+            metadata: makeDownloadMetadata(urlString: "https://example.com/watch?v=123"),
+            resolvedAuth: try authStore.resolvedAuth(for: firstProfile.id),
+            title: "Inspection complete",
+            message: "Ready to queue"
+        )
+
+        XCTAssertNotNil(appState.downloadDraft.metadata)
+        XCTAssertEqual(appState.downloadDraft.selectedFormatID, "137+140")
+
+        appState.updateSelectedDownloadAuthProfileID(secondProfile.id)
+
+        XCTAssertNil(appState.downloadDraft.metadata)
+        XCTAssertEqual(appState.downloadDraft.selectedFormatID, DownloadDraft.automaticFormatID)
+        XCTAssertNil(appState.downloadDraft.lastProbedAuthFingerprint)
+        XCTAssertNil(appState.downloadDraft.probeStatusTitle)
+    }
+
+    @MainActor
+    func testEnqueueDownloadBlocksStaleProbeState() throws {
+        let appState = try makeIsolatedAppState()
+        appState.updateDownloadURL("https://example.com/watch?v=123")
+        appState.downloadDraft.metadata = makeDownloadMetadata(urlString: "https://example.com/watch?v=123")
+        appState.downloadDraft.lastProbedURLString = "https://example.com/watch?v=123"
+        appState.downloadDraft.lastProbedAuthFingerprint = "stale-context"
+        appState.downloadDraft.selectedFormatID = "137+140"
+
+        appState.enqueueDownload()
+
+        XCTAssertTrue(appState.queueStore.jobs.isEmpty)
+        XCTAssertEqual(appState.alert?.title, "Inspect URL again")
+        XCTAssertNil(appState.downloadDraft.metadata)
+        XCTAssertEqual(appState.downloadDraft.selectedFormatID, DownloadDraft.automaticFormatID)
+    }
+
+    @MainActor
+    func testSuccessfulDownloadProbeStampsFreshContextAndAllowsEnqueue() throws {
+        let appState = try makeIsolatedAppState()
+        appState.updateDownloadURL("https://example.com/watch?v=123")
+        appState.applySuccessfulDownloadProbe(
+            metadata: makeDownloadMetadata(urlString: "https://example.com/watch?v=123"),
+            resolvedAuth: nil,
+            title: "Inspection complete",
+            message: "Ready to queue"
+        )
+
+        XCTAssertEqual(appState.downloadDraft.lastProbedURLString, "https://example.com/watch?v=123")
+        XCTAssertNil(appState.downloadDraft.lastProbedAuthFingerprint)
+        XCTAssertEqual(appState.downloadDraft.selectedFormatID, "137+140")
+
+        appState.enqueueDownload()
+
+        XCTAssertEqual(appState.queueStore.jobs.count, 1)
+        guard case .download(let request)? = appState.queueStore.selectedJob?.request.payload else {
+            return XCTFail("Expected a queued download request.")
+        }
+
+        XCTAssertEqual(request.sourceURLString, "https://example.com/watch?v=123")
+        XCTAssertEqual(request.selectedFormatID, "137+140")
+        XCTAssertNil(appState.alert)
+    }
+
+    @MainActor
+    func testDroppedURLQueuesDownloadWithoutInspection() throws {
+        let appState = try makeIsolatedAppState()
+        appState.downloadDraft.selectedPreset = .mp4Video
+
+        appState.enqueueDroppedDownloadText("Watch later: https://example.com/watch?v=drag")
+
+        XCTAssertEqual(appState.queueStore.jobs.count, 1)
+        XCTAssertEqual(appState.selectedSection, .queue)
+        guard case .download(let request)? = appState.queueStore.selectedJob?.request.payload else {
+            return XCTFail("Expected a queued download request.")
+        }
+
+        XCTAssertEqual(request.sourceURLString, "https://example.com/watch?v=drag")
+        XCTAssertEqual(request.selectedFormatID, DownloadDraft.automaticFormatID)
+        XCTAssertEqual(request.preset, .mp4Video)
+        XCTAssertNil(appState.alert)
+    }
+
+    @MainActor
+    func testDroppedFilesQueueConvertRequestsUsingCurrentPreset() throws {
+        let appState = try makeIsolatedAppState()
+        appState.convertDraft.selectedPreset = .extractAudio
+        let firstURL = URL(fileURLWithPath: "/tmp/session-one.mov")
+        let secondURL = URL(fileURLWithPath: "/tmp/session-two.mkv")
+
+        appState.enqueueDroppedFiles([firstURL, secondURL], for: .convert)
+
+        XCTAssertEqual(appState.queueStore.jobs.count, 2)
+        XCTAssertEqual(appState.selectedSection, .queue)
+        let requests = appState.queueStore.jobs.compactMap { job -> ConvertRequest? in
+            guard case .convert(let request) = job.request.payload else { return nil }
+            return request
+        }
+        XCTAssertEqual(Set(requests.map(\.inputURL)), Set([firstURL, secondURL]))
+        XCTAssertTrue(requests.allSatisfy { $0.preset == .extractAudio })
+        XCTAssertNil(appState.alert)
+    }
+
+    @MainActor
+    func testDroppedFilesQueueTranscriptionRequestsUsingCurrentFormat() throws {
+        let appState = try makeIsolatedAppState()
+        appState.toolVersions = [
+            ToolVersionInfo(
+                tool: .whisperCLI,
+                versionString: "usage: whisper-cli",
+                executablePath: "/tmp/whisper-cli",
+                architecture: .arm64,
+                sourceDescription: "Test",
+                linkageStatus: .selfContained,
+                linkageDetail: "System libraries only",
+                isVendored: true,
+                isSelfContained: true
+            )
+        ]
+        appState.bundledAssetStatuses = [
+            BundledAssetStatus(
+                asset: .whisperBaseEnglishModel,
+                isAvailable: true,
+                path: "/tmp/ggml-base.en.bin",
+                detail: "Available"
+            )
+        ]
+        appState.transcribeDraft.outputFormat = .vtt
+        let inputURL = URL(fileURLWithPath: "/tmp/interview.mp4")
+
+        appState.enqueueDroppedFiles([inputURL], for: .transcribe)
+
+        XCTAssertEqual(appState.queueStore.jobs.count, 1)
+        XCTAssertEqual(appState.selectedSection, .queue)
+        guard case .transcribe(let request)? = appState.queueStore.selectedJob?.request.payload else {
+            return XCTFail("Expected a queued transcription request.")
+        }
+
+        XCTAssertEqual(request.inputURL, inputURL)
+        XCTAssertEqual(request.outputFormat, .vtt)
+        XCTAssertNil(appState.alert)
     }
 
     func testDownloadArtifactDetectionCapturesSubtitleSidecars() {
@@ -464,6 +823,62 @@ final class MediaGetterTests: XCTestCase {
         XCTAssertEqual(artifacts.last?.url.lastPathComponent, "sample-output.en.vtt")
     }
 
+    func testDownloadFailureDoesNotCommitPartialStagedOutput() async throws {
+        let root = try makeTemporaryDirectory()
+        let toolsDirectory = root.appendingPathComponent("Tools", isDirectory: true)
+        let destinationDirectory = root.appendingPathComponent("Downloads", isDirectory: true)
+        try FileManager.default.createDirectory(at: toolsDirectory, withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: destinationDirectory, withIntermediateDirectories: true)
+        try writeExecutable(
+            named: "yt-dlp",
+            in: toolsDirectory,
+            contents: """
+            #!/bin/sh
+            destination=""
+            previous=""
+            for arg in "$@"; do
+              if [ "$previous" = "-P" ]; then
+                destination="$arg"
+              fi
+              previous="$arg"
+            done
+            mkdir -p "$destination"
+            printf 'partial media' > "$destination/sample.mp4"
+            echo "$destination/sample.mp4"
+            exit 1
+            """
+        )
+        try writeExecutable(
+            named: "deno",
+            in: toolsDirectory,
+            contents: """
+            #!/bin/sh
+            exit 0
+            """
+        )
+        let service = DownloadService(
+            toolchainManager: ToolchainManager(overrideToolsDirectory: toolsDirectory),
+            processRunner: ProcessRunner()
+        )
+
+        await XCTAssertThrowsErrorAsync(
+            try await service.execute(
+                request: DownloadRequest(
+                    sourceURLString: "https://example.com/video",
+                    destinationDirectory: destinationDirectory,
+                    selectedFormatID: "best",
+                    preset: .mp4Video,
+                    subtitleWorkflow: .off(format: .srt),
+                    filenameTemplate: "%(title)s",
+                    overwriteExisting: true,
+                    resolvedAuth: nil
+                )
+            ) { _ in }
+        )
+
+        XCTAssertFalse(FileManager.default.fileExists(atPath: destinationDirectory.appendingPathComponent("sample.mp4").path))
+    }
+
     func testTranscodeCommandUsesPresetDefaults() {
         let service = TranscodeService(
             toolchainManager: ToolchainManager(overrideToolsDirectory: FileManager.default.temporaryDirectory),
@@ -489,6 +904,82 @@ final class MediaGetterTests: XCTestCase {
         XCTAssertEqual(outputURL.path, "/tmp/exports/source-audio.mp3")
         XCTAssertTrue(command.arguments.contains("-vn"))
         XCTAssertTrue(command.arguments.contains("libmp3lame"))
+        XCTAssertFalse(command.arguments.contains("-hwaccel"))
+    }
+
+    func testTranscodeCommandUsesHardwareAccelerationForVideoPresets() {
+        let service = TranscodeService(
+            toolchainManager: ToolchainManager(overrideToolsDirectory: FileManager.default.temporaryDirectory),
+            processRunner: ProcessRunner()
+        )
+        let toolURL = URL(fileURLWithPath: "/tmp/ffmpeg")
+        let (command, _) = service.buildCommand(
+            for: ConvertRequest(
+                inputURL: URL(fileURLWithPath: "/tmp/source.mov"),
+                destinationDirectory: URL(fileURLWithPath: "/tmp/exports", isDirectory: true),
+                preset: .mp4Video,
+                subtitleWorkflow: .off(format: .srt),
+                containerOverride: nil,
+                videoCodecOverride: nil,
+                audioCodecOverride: nil,
+                audioBitrateOverride: nil,
+                overwriteExisting: true,
+                hardwareAcceleration: .automatic
+            ),
+            toolURL: toolURL
+        )
+
+        XCTAssertTrue(command.arguments.contains("-hwaccel"))
+        XCTAssertTrue(command.arguments.contains("auto"))
+    }
+
+    func testTranscodeFailurePreservesExistingDestinationFile() async throws {
+        let root = try makeTemporaryDirectory()
+        let toolsDirectory = root.appendingPathComponent("Tools", isDirectory: true)
+        let destinationDirectory = root.appendingPathComponent("Exports", isDirectory: true)
+        try FileManager.default.createDirectory(at: toolsDirectory, withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: destinationDirectory, withIntermediateDirectories: true)
+        try writeExecutable(
+            named: "ffmpeg",
+            in: toolsDirectory,
+            contents: """
+            #!/bin/sh
+            output=""
+            for arg in "$@"; do
+              output="$arg"
+            done
+            printf 'partial export' > "$output"
+            exit 1
+            """
+        )
+        let inputURL = root.appendingPathComponent("source.mov")
+        try Data("media".utf8).write(to: inputURL)
+        let existingOutputURL = destinationDirectory.appendingPathComponent("source-audio.mp3")
+        try Data("original export".utf8).write(to: existingOutputURL)
+        let service = TranscodeService(
+            toolchainManager: ToolchainManager(overrideToolsDirectory: toolsDirectory),
+            processRunner: ProcessRunner()
+        )
+
+        await XCTAssertThrowsErrorAsync(
+            try await service.execute(
+                request: ConvertRequest(
+                    inputURL: inputURL,
+                    destinationDirectory: destinationDirectory,
+                    preset: .extractAudio,
+                    subtitleWorkflow: .off(format: .srt),
+                    containerOverride: nil,
+                    videoCodecOverride: nil,
+                    audioCodecOverride: nil,
+                    audioBitrateOverride: nil,
+                    overwriteExisting: true,
+                    hardwareAcceleration: .automatic
+                ),
+                metadata: MediaMetadata(source: .local(inputURL), title: "source.mov", duration: 5)
+            ) { _ in }
+        )
+
+        XCTAssertEqual(try String(contentsOf: existingOutputURL), "original export")
     }
 
     func testTrimPlanPrefersStreamCopyAtBeginning() {
@@ -767,6 +1258,44 @@ final class MediaGetterTests: XCTestCase {
         }
     }
 
+    func testTranscriptionFailurePreservesExistingOutputWhenOverwriteEnabled() async throws {
+        let fixture = try makeTranscriptionFixture(
+            whisperScript: """
+            #!/bin/sh
+            output_base=""
+            ext=".txt"
+            while [ "$#" -gt 0 ]; do
+              case "$1" in
+                -of|--output-file) output_base="$2"; shift 2 ;;
+                -otxt|--output-txt) ext=".txt"; shift ;;
+                *) shift ;;
+              esac
+            done
+            printf 'partial transcript' > "${output_base}${ext}"
+            exit 1
+            """
+        )
+        var request = fixture.request
+        request.overwriteExisting = true
+        let existingOutputURL = fixture.destinationDirectory.appendingPathComponent("session-transcript.txt")
+        try Data("original transcript".utf8).write(to: existingOutputURL)
+
+        let service = TranscriptionService(
+            toolchainManager: fixture.toolchain,
+            processRunner: ProcessRunner(),
+            temporaryDirectory: fixture.temporaryDirectory
+        )
+
+        await XCTAssertThrowsErrorAsync(
+            try await service.execute(
+                request: request,
+                metadata: fixture.metadata
+            ) { _ in }
+        )
+
+        XCTAssertEqual(try String(contentsOf: existingOutputURL), "original transcript")
+    }
+
     func testTranscriptionExecuteCleansUpTemporaryAudioOnFailure() async throws {
         let fixture = try makeTranscriptionFixture(
             whisperScript: """
@@ -946,6 +1475,81 @@ final class MediaGetterTests: XCTestCase {
         )
     }
 
+    private func makeQueueJobRequest() -> JobRequest {
+        let sourceURL = URL(fileURLWithPath: "/tmp/source.mov")
+        return JobRequest(
+            kind: .convert,
+            title: "source.mov",
+            subtitle: "Audio",
+            source: .local(sourceURL),
+            preset: .extractAudio,
+            transcriptionOutputFormat: nil,
+            payload: .convert(
+                ConvertRequest(
+                    inputURL: sourceURL,
+                    destinationDirectory: URL(fileURLWithPath: "/tmp/exports", isDirectory: true),
+                    preset: .extractAudio,
+                    subtitleWorkflow: .off(format: .srt),
+                    containerOverride: nil,
+                    videoCodecOverride: nil,
+                    audioCodecOverride: nil,
+                    audioBitrateOverride: nil,
+                    overwriteExisting: true,
+                    hardwareAcceleration: .automatic
+                )
+            )
+        )
+    }
+
+    private func makeDownloadMetadata(urlString: String) -> MediaMetadata {
+        MediaMetadata(
+            source: .remote(urlString),
+            title: "Example Video",
+            duration: 42,
+            extractor: "generic",
+            formats: [
+                DownloadFormatOption(
+                    id: "137+140",
+                    ext: "mp4",
+                    displayName: "1080p • MP4",
+                    resolution: "1920x1080",
+                    note: nil,
+                    sizeBytes: 1_024_000,
+                    fps: 30,
+                    hasVideo: true,
+                    hasAudio: true
+                )
+            ]
+        )
+    }
+
+    @MainActor
+    private func makeIsolatedAppState(
+        root: URL? = nil,
+        authStore: AuthProfileStore? = nil
+    ) throws -> AppState {
+        let resolvedRoot: URL
+        if let root {
+            resolvedRoot = root
+        } else {
+            resolvedRoot = try makeTemporaryDirectory()
+        }
+        let suiteName = "MediaGetterTests.\(UUID().uuidString)"
+        let defaults = UserDefaults(suiteName: suiteName)!
+        let preferencesStore = PreferencesStore(defaults: defaults)
+        preferencesStore.defaultDownloadSubtitlePolicy = .off
+
+        return AppState(
+            preferencesStore: preferencesStore,
+            historyStore: HistoryStore(persistenceURL: resolvedRoot.appendingPathComponent("history.json")),
+            authProfileStore: authStore ?? AuthProfileStore(
+                persistenceURL: resolvedRoot.appendingPathComponent("auth_profiles.json"),
+                profilesDirectoryURL: resolvedRoot.appendingPathComponent("AuthProfiles", isDirectory: true),
+                secretStore: InMemorySecretStore()
+            )
+        )
+    }
+
     private func makeValidCookieFile(at url: URL) throws {
         try """
         # Netscape HTTP Cookie File
@@ -957,6 +1561,18 @@ final class MediaGetterTests: XCTestCase {
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         return directory
+    }
+
+    private func waitUntilFileExists(_ url: URL, timeout: TimeInterval = 2) async throws {
+        let deadline = Date().addingTimeInterval(timeout)
+        while Date() < deadline {
+            if FileManager.default.fileExists(atPath: url.path) {
+                return
+            }
+            try await Task.sleep(nanoseconds: 20_000_000)
+        }
+
+        XCTFail("Timed out waiting for \(url.path)")
     }
 
     private func writeExecutable(named name: String, in directory: URL, contents: String) throws {

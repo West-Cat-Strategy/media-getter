@@ -41,6 +41,9 @@ jobs:
           export PATH="$XCODEGEN_DIR/xcodegen/bin:$PATH"
           [[ "$(xcodegen --version | awk '/Version:/ { print $2 }')" == "$XCODEGEN_VERSION" ]]
 
+      - name: Restore Whisper Model Asset
+        run: script/restore_whisper_model_asset.sh
+
       - name: Generate Project And Resolve Packages
         run: |
           xcodegen generate --spec project.yml

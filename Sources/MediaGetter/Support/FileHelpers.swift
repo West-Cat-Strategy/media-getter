@@ -59,41 +59,84 @@ enum PasteboardHelper {
 }
 
 enum DropSupport {
+    static let supportedTypeIdentifiers = [
+        UTType.fileURL.identifier,
+        UTType.url.identifier,
+        UTType.text.identifier
+    ]
+
     static func handleURLOrTextProviders(
         _ providers: [NSItemProvider],
         onFile: @escaping @MainActor (URL) -> Void,
         onText: @escaping @MainActor (String) -> Void
     ) -> Bool {
+        handleURLOrTextProviders(
+            providers,
+            onFile: onFile,
+            onRemoteURL: { onText($0.absoluteString) },
+            onText: onText
+        )
+    }
+
+    static func handleURLOrTextProviders(
+        _ providers: [NSItemProvider],
+        onFile: @escaping @MainActor (URL) -> Void,
+        onRemoteURL: @escaping @MainActor (URL) -> Void,
+        onText: @escaping @MainActor (String) -> Void
+    ) -> Bool {
+        var handledProvider = false
+
         for provider in providers {
             if provider.hasItemConformingToTypeIdentifier(UTType.fileURL.identifier) {
+                handledProvider = true
                 provider.loadItem(forTypeIdentifier: UTType.fileURL.identifier, options: nil) { item, _ in
-                    let loadedURL: URL?
-                    if let data = item as? Data,
-                       let string = String(data: data, encoding: .utf8) {
-                        loadedURL = URL(string: string)
-                    } else {
-                        loadedURL = item as? URL
-                    }
-
-                    guard let url = loadedURL else { return }
+                    guard let url = url(from: item) else { return }
                     Task { @MainActor in
                         onFile(url)
                     }
                 }
-                return true
+                continue
+            }
+
+            if provider.hasItemConformingToTypeIdentifier(UTType.url.identifier) {
+                handledProvider = true
+                provider.loadItem(forTypeIdentifier: UTType.url.identifier, options: nil) { item, _ in
+                    guard let url = url(from: item) else { return }
+                    Task { @MainActor in
+                        if url.isFileURL {
+                            onFile(url)
+                        } else {
+                            onRemoteURL(url)
+                        }
+                    }
+                }
+                continue
             }
 
             if provider.canLoadObject(ofClass: NSString.self) {
+                handledProvider = true
                 _ = provider.loadObject(ofClass: NSString.self) { item, _ in
                     guard let string = item as? String else { return }
                     Task { @MainActor in
                         onText(string)
                     }
                 }
-                return true
             }
         }
 
-        return false
+        return handledProvider
+    }
+
+    private static func url(from item: NSSecureCoding?) -> URL? {
+        if let data = item as? Data,
+           let string = String(data: data, encoding: .utf8) {
+            return URL(string: string.trimmingCharacters(in: .whitespacesAndNewlines))
+        }
+
+        if let string = item as? String {
+            return URL(string: string.trimmingCharacters(in: .whitespacesAndNewlines))
+        }
+
+        return item as? URL
     }
 }

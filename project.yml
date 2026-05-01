@@ -26,7 +26,6 @@ targets:
       - path: Resources
         excludes:
           - Tools
-      - path: Resources/Intro/gateway-opener.mp4
     dependencies:
       - package: Sparkle
     settings:
@@ -46,7 +45,6 @@ targets:
     preBuildScripts:
       - name: Bundle CLI Tools
         outputFiles:
-          - $(TARGET_BUILD_DIR)/$(UNLOCALIZED_RESOURCES_FOLDER_PATH)/gateway-opener.mp4
           - $(TARGET_BUILD_DIR)/$(UNLOCALIZED_RESOURCES_FOLDER_PATH)/Tools/yt-dlp
           - $(TARGET_BUILD_DIR)/$(UNLOCALIZED_RESOURCES_FOLDER_PATH)/Tools/gallery-dl
           - $(TARGET_BUILD_DIR)/$(UNLOCALIZED_RESOURCES_FOLDER_PATH)/Tools/ffmpeg
@@ -58,14 +56,10 @@ targets:
         script: |
           set -euo pipefail
 
-          RESOURCES_DIR="${TARGET_BUILD_DIR}/${UNLOCALIZED_RESOURCES_FOLDER_PATH}"
           TOOLS_DIR="${TARGET_BUILD_DIR}/${UNLOCALIZED_RESOURCES_FOLDER_PATH}/Tools"
           MODELS_DIR="${TARGET_BUILD_DIR}/${UNLOCALIZED_RESOURCES_FOLDER_PATH}/Models"
-          mkdir -p "$RESOURCES_DIR"
           mkdir -p "$TOOLS_DIR"
           mkdir -p "$MODELS_DIR"
-
-          cp -f "${SRCROOT}/Resources/Intro/gateway-opener.mp4" "${RESOURCES_DIR}/gateway-opener.mp4"
 
           resolve_vendored_tool() {
             local tool="$1"
@@ -111,8 +105,17 @@ targets:
             local tool_path="$1"
             local tool_name="$2"
             local dependency
+            local dependencies_file
 
-            for dependency in $(/usr/bin/otool -L "$tool_path" | tail -n +2 | sed 's/^[[:space:]]*//' | awk '{print $1}'); do
+            dependencies_file="$(mktemp)"
+            /usr/bin/otool -L "$tool_path" | tail -n +2 > "$dependencies_file"
+
+            while IFS= read -r line; do
+              line="${line#"${line%%[![:space:]]*}"}"
+              [[ -z "$line" ]] && continue
+              [[ "$line" == *"(architecture "*"):" ]] && continue
+              dependency="${line%% *}"
+
               case "$dependency" in
                 /System/*|/usr/lib/*|@executable_path/*|@loader_path/*|@rpath/*)
                   ;;
@@ -121,7 +124,9 @@ targets:
                   exit 1
                   ;;
               esac
-            done
+            done < "$dependencies_file"
+
+            rm -f "$dependencies_file"
           }
 
           for tool in yt-dlp gallery-dl ffmpeg ffprobe deno whisper-cli; do

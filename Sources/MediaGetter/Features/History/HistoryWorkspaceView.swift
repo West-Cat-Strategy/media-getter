@@ -4,8 +4,7 @@ struct HistoryWorkspaceView: View {
     let appState: AppState
 
     var body: some View {
-        ScrollView {
-            VStack(alignment: .leading, spacing: 24) {
+        WorkspaceContainer {
                 WorkspaceHeader(
                     title: "History",
                     subtitle: "Jump back into recent media work, reveal exported files, or reload a previous source into the right workflow."
@@ -42,9 +41,11 @@ struct HistoryWorkspaceView: View {
                                         Text(outputPath)
                                             .font(.caption)
                                             .foregroundStyle(.secondary)
+                                            .lineLimit(2)
+                                            .truncationMode(.middle)
                                     }
 
-                                    HStack {
+                                    AdaptiveButtonRow {
                                         Button("Load into Workspace") {
                                             appState.loadHistoryEntryIntoWorkspace(entry)
                                         }
@@ -60,7 +61,6 @@ struct HistoryWorkspaceView: View {
                                                 FileHelpers.reveal(outputURL)
                                             }
                                         }
-
                                     }
 
                                     SubtitleArtifactSection(
@@ -86,8 +86,6 @@ struct HistoryWorkspaceView: View {
                     }
                     .accessibilityIdentifier(AccessibilityID.historyList)
                 }
-            }
-            .frame(maxWidth: 980, alignment: .leading)
         }
     }
 }

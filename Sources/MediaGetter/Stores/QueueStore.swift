@@ -26,6 +26,7 @@ final class QueueStore {
             id: request.id,
             request: request,
             status: .pending,
+            stage: .queued,
             progress: 0,
             phase: "Waiting for queue",
             logs: [],
@@ -41,21 +42,36 @@ final class QueueStore {
     }
 
     func retry(jobID: UUID) {
-        guard let existing = jobs.first(where: { $0.id == jobID }) else { return }
-        var retriedRequest = existing.request
-        retriedRequest.id = UUID()
-        enqueue(retriedRequest)
+        guard let index = jobs.firstIndex(where: { $0.id == jobID }) else { return }
+        guard jobs[index].status == .failed || jobs[index].status == .cancelled else { return }
+
+        jobs[index].status = .pending
+        jobs[index].stage = .queued
+        jobs[index].progress = 0
+        jobs[index].phase = "Waiting for queue"
+        jobs[index].logs = []
+        jobs[index].artifacts = []
+        jobs[index].startedAt = nil
+        jobs[index].completedAt = nil
+        jobs[index].errorMessage = nil
+        selectedJobID = jobs[index].id
+        scheduleNextIfPossible()
     }
 
     func cancel(jobID: UUID) {
         if let index = jobs.firstIndex(where: { $0.id == jobID && $0.status == .pending }) {
             jobs[index].status = .cancelled
+            jobs[index].stage = .cancelled
             jobs[index].phase = "Cancelled before start"
             jobs[index].completedAt = Date()
             return
         }
 
-        guard selectedRunningJob?.id == jobID else { return }
+        guard let index = jobs.firstIndex(where: { $0.id == jobID && $0.status == .running }) else { return }
+        let cancelledStageDescription = jobs[index].stage.cancelDescription
+        jobs[index].status = .cancelling
+        jobs[index].stage = .cancelling
+        jobs[index].phase = "Cancelling \(cancelledStageDescription)"
         executionTask?.cancel()
     }
 
@@ -65,7 +81,7 @@ final class QueueStore {
     }
 
     var selectedRunningJob: JobRecord? {
-        jobs.first(where: { $0.status == .running })
+        jobs.first(where: { $0.status == .running || $0.status == .cancelling })
     }
 
     private func scheduleNextIfPossible() {
@@ -113,6 +129,8 @@ final class QueueStore {
         guard let index = jobs.firstIndex(where: { $0.id == jobID }) else { return }
 
         switch event {
+        case .stage(let stage):
+            jobs[index].stage = stage
         case .phase(let phase):
             jobs[index].phase = phase
         case .progress(let progress):
@@ -137,6 +155,7 @@ final class QueueStore {
     private func finish(jobID: UUID, result: JobResult) {
         guard let index = jobs.firstIndex(where: { $0.id == jobID }) else { return }
         jobs[index].status = .completed
+        jobs[index].stage = .completed
         jobs[index].progress = 1
         jobs[index].phase = result.summary
         jobs[index].artifacts = result.artifacts
@@ -147,6 +166,7 @@ final class QueueStore {
     private func markCancelled(jobID: UUID) {
         guard let index = jobs.firstIndex(where: { $0.id == jobID }) else { return }
         jobs[index].status = .cancelled
+        jobs[index].stage = .cancelled
         jobs[index].phase = "Cancelled"
         jobs[index].completedAt = Date()
     }
@@ -154,6 +174,7 @@ final class QueueStore {
     private func markFailed(jobID: UUID, error: Error) {
         guard let index = jobs.firstIndex(where: { $0.id == jobID }) else { return }
         jobs[index].status = .failed
+        jobs[index].stage = .failed
         jobs[index].phase = "Failed"
         jobs[index].errorMessage = error.localizedDescription
         jobs[index].logs.append(error.localizedDescription)

@@ -115,7 +115,7 @@ final class ToolchainManager: @unchecked Sendable {
                 let runtimeStatus = try await inspectRuntime(for: executableURL, using: runner)
 
                 if !runtimeStatus.architecture.isAppleSiliconReady {
-                    issues.append("\(tool.displayName) must be bundled as an arm64 binary. Found \(runtimeStatus.architecture.title.lowercased()).")
+                    issues.append("\(tool.displayName) must include Apple Silicon support. Found \(runtimeStatus.architecture.title.lowercased()).")
                 }
 
                 if !runtimeStatus.isSelfContained {
@@ -200,6 +200,18 @@ final class ToolchainManager: @unchecked Sendable {
             || path.hasPrefix("@rpath/")
     }
 
+    static func parseDependencyPaths(otoolOutput: String) -> [String] {
+        otoolOutput
+            .split(whereSeparator: \.isNewline)
+            .dropFirst()
+            .compactMap { line -> String? in
+                let trimmed = line.trimmingCharacters(in: .whitespacesAndNewlines)
+                guard !trimmed.isEmpty else { return nil }
+                guard !(trimmed.contains("(architecture ") && trimmed.hasSuffix(":")) else { return nil }
+                return trimmed.split(separator: " ").first.map(String.init)
+            }
+    }
+
     private func assetStatus(for asset: BundledAsset) -> BundledAssetStatus {
         let path = expectedAssetURL(for: asset).path
         let isAvailable = FileManager.default.fileExists(atPath: path)
@@ -258,14 +270,7 @@ final class ToolchainManager: @unchecked Sendable {
             )
         )
 
-        let dependencyPaths = otoolOutput.stdout
-            .split(whereSeparator: \.isNewline)
-            .dropFirst()
-            .compactMap { line -> String? in
-                let trimmed = line.trimmingCharacters(in: .whitespacesAndNewlines)
-                guard !trimmed.isEmpty else { return nil }
-                return trimmed.split(separator: " ").first.map(String.init)
-            }
+        let dependencyPaths = Self.parseDependencyPaths(otoolOutput: otoolOutput.stdout)
 
         let externalDependencies = dependencyPaths.filter { !Self.isAllowedDependencyPath($0) }
         let isSelfContained = externalDependencies.isEmpty

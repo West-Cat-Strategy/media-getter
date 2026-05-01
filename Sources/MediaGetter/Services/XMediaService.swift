@@ -18,6 +18,8 @@ final class XMediaService: @unchecked Sendable {
     func exportCookies(browser: XBrowser, cookieFilePath: String, onEvent: @escaping @Sendable (JobEvent) async -> Void) async throws {
         await onEvent(.phase("Exporting cookies from \(browser.title)"))
         let ytDlpURL = try toolchainManager.executableURL(for: .ytDlp)
+        let cookieURL = URL(fileURLWithPath: cookieFilePath)
+        try fileManager.createDirectory(at: cookieURL.deletingLastPathComponent(), withIntermediateDirectories: true)
         
         let arguments = [
             "--cookies-from-browser", browser.ytDlpArgument,
@@ -27,9 +29,13 @@ final class XMediaService: @unchecked Sendable {
         
         let command = ProcessCommand(executableURL: ytDlpURL, arguments: arguments)
         
-        // We ignore the exit code as per requirements, but we log the output
-        _ = try? await processRunner.run(command) { line in
-            Task { await onEvent(.log(line.text)) }
+        do {
+            _ = try await processRunner.run(command) { line in
+                Task { await onEvent(.log(line.text)) }
+            }
+        } catch {
+            await onEvent(.log("Cookie export failed: \(error.localizedDescription)"))
+            throw ProcessRunnerError.launchFailed("Could not export cookies from \(browser.title). Confirm the browser is installed, you are logged into X, and the cookie file path is writable.")
         }
     }
 
@@ -70,9 +76,9 @@ final class XMediaService: @unchecked Sendable {
         
         let command = ProcessCommand(executableURL: galleryDlURL, arguments: arguments)
         
-        try? fileManager.createDirectory(at: request.destinationDirectory, withIntermediateDirectories: true)
+        try fileManager.createDirectory(at: request.destinationDirectory, withIntermediateDirectories: true)
         
-        let result = try await processRunner.run(command) { line in
+        _ = try await processRunner.run(command) { line in
             Task {
                 await onEvent(.log(line.text))
                 

@@ -1,6 +1,28 @@
 import SwiftUI
 
-// MARK: - Button Styles
+enum LayoutMetrics {
+    static let minimumWindowWidth: CGFloat = 900
+    static let minimumWindowHeight: CGFloat = 620
+    static let workspaceMaxWidth: CGFloat = 980
+    static let compactPadding: CGFloat = 16
+    static let regularPadding: CGFloat = 24
+}
+
+struct WorkspaceContainer<Content: View>: View {
+    @ViewBuilder var content: Content
+
+    var body: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 24) {
+                content
+            }
+            .frame(maxWidth: LayoutMetrics.workspaceMaxWidth, alignment: .leading)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(.horizontal, LayoutMetrics.compactPadding)
+            .padding(.vertical, LayoutMetrics.regularPadding)
+        }
+    }
+}
 
 struct InteractiveButtonStyle: ButtonStyle {
     @State private var isHovering = false
@@ -80,6 +102,72 @@ struct StudioToggleStyle: ToggleStyle {
     }
 }
 
+struct WrappingHStack: Layout {
+    var horizontalSpacing: CGFloat = 8
+    var verticalSpacing: CGFloat = 8
+
+    func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
+        layout(for: proposal, subviews: subviews).size
+    }
+
+    func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
+        let result = layout(for: ProposedViewSize(width: bounds.width, height: proposal.height), subviews: subviews)
+
+        for placement in result.placements {
+            subviews[placement.index].place(
+                at: CGPoint(x: bounds.minX + placement.origin.x, y: bounds.minY + placement.origin.y),
+                proposal: ProposedViewSize(placement.size)
+            )
+        }
+    }
+
+    private func layout(for proposal: ProposedViewSize, subviews: Subviews) -> (size: CGSize, placements: [Placement]) {
+        let maxWidth = proposal.width ?? .greatestFiniteMagnitude
+        var placements: [Placement] = []
+        var cursor = CGPoint.zero
+        var rowHeight: CGFloat = 0
+        var measuredWidth: CGFloat = 0
+
+        for index in subviews.indices {
+            let size = subviews[index].sizeThatFits(.unspecified)
+            let shouldWrap = cursor.x > 0 && cursor.x + size.width > maxWidth
+
+            if shouldWrap {
+                cursor.x = 0
+                cursor.y += rowHeight + verticalSpacing
+                rowHeight = 0
+            }
+
+            placements.append(Placement(index: index, origin: cursor, size: size))
+            measuredWidth = max(measuredWidth, cursor.x + size.width)
+            cursor.x += size.width + horizontalSpacing
+            rowHeight = max(rowHeight, size.height)
+        }
+
+        let width = proposal.width ?? measuredWidth
+        return (CGSize(width: width, height: cursor.y + rowHeight), placements)
+    }
+
+    private struct Placement {
+        let index: Int
+        let origin: CGPoint
+        let size: CGSize
+    }
+}
+
+struct AdaptiveButtonRow<Content: View>: View {
+    var horizontalSpacing: CGFloat = 8
+    var verticalSpacing: CGFloat = 8
+    @ViewBuilder var content: Content
+
+    var body: some View {
+        WrappingHStack(horizontalSpacing: horizontalSpacing, verticalSpacing: verticalSpacing) {
+            content
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+}
+
 struct SidebarButtonStyle: ButtonStyle {
     let isSelected: Bool
     @State private var isHovering = false
@@ -120,6 +208,47 @@ struct WorkspaceHeader: View {
                 .font(.system(size: 30, weight: .semibold, design: .rounded))
             Text(subtitle)
                 .foregroundStyle(.secondary)
+        }
+    }
+}
+
+struct WorkspaceDropOverlay: View {
+    let section: AppSection
+
+    var body: some View {
+        Label(title, systemImage: systemImage)
+            .font(.headline)
+            .padding(.horizontal, 18)
+            .padding(.vertical, 12)
+            .background(.regularMaterial, in: Capsule())
+            .overlay(
+                Capsule()
+                    .strokeBorder(Color.accentColor.opacity(0.45), lineWidth: 1)
+            )
+            .shadow(radius: 10, y: 4)
+            .frame(maxWidth: .infinity, alignment: .center)
+            .accessibilityIdentifier(AccessibilityID.workspaceDropOverlay)
+    }
+
+    private var title: String {
+        switch section {
+        case .transcribe:
+            "Drop to queue transcription"
+        case .trim:
+            "Drop to open clip"
+        case .download, .xMedia, .convert, .queue, .history:
+            "Drop to queue"
+        }
+    }
+
+    private var systemImage: String {
+        switch section {
+        case .transcribe:
+            "text.bubble"
+        case .trim:
+            "scissors"
+        case .download, .xMedia, .convert, .queue, .history:
+            "tray.and.arrow.down"
         }
     }
 }
@@ -194,27 +323,42 @@ struct MetadataSummaryCard: View {
 
     var body: some View {
         StudioCard {
-            HStack(alignment: .top, spacing: 18) {
-                thumbnailView
-                    .frame(width: 180, height: 104)
-                    .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+            ViewThatFits(in: .horizontal) {
+                HStack(alignment: .top, spacing: 18) {
+                    thumbnail
+                    metadataDetails
+                }
 
-                VStack(alignment: .leading, spacing: 10) {
-                    Text(metadata.title)
-                        .font(.title3.weight(.semibold))
-                    labeledValue("Duration", Formatters.duration(metadata.duration))
-                    labeledValue("Container", metadata.container ?? "Unknown")
-                    labeledValue("Video", metadata.videoCodec ?? "Unknown")
-                    labeledValue("Audio", metadata.audioCodec ?? "Unknown")
-                    if let extractor = metadata.extractor {
-                        labeledValue("Extractor", extractor)
-                    }
-                    if let dimensions = metadata.dimensionsDescription {
-                        labeledValue("Dimensions", dimensions)
-                    }
-                    labeledValue("Size", Formatters.bytes(metadata.fileSize))
+                VStack(alignment: .leading, spacing: 14) {
+                    thumbnail
+                    metadataDetails
                 }
             }
+        }
+    }
+
+    private var thumbnail: some View {
+        thumbnailView
+            .frame(width: 180, height: 104)
+            .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+    }
+
+    private var metadataDetails: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Text(metadata.title)
+                .font(.title3.weight(.semibold))
+                .lineLimit(3)
+            labeledValue("Duration", Formatters.duration(metadata.duration))
+            labeledValue("Container", metadata.container ?? "Unknown")
+            labeledValue("Video", metadata.videoCodec ?? "Unknown")
+            labeledValue("Audio", metadata.audioCodec ?? "Unknown")
+            if let extractor = metadata.extractor {
+                labeledValue("Extractor", extractor)
+            }
+            if let dimensions = metadata.dimensionsDescription {
+                labeledValue("Dimensions", dimensions)
+            }
+            labeledValue("Size", Formatters.bytes(metadata.fileSize))
         }
     }
 
@@ -260,21 +404,36 @@ struct PathPickerRow: View {
     let action: () -> Void
 
     var body: some View {
-        HStack(alignment: .firstTextBaseline) {
-            VStack(alignment: .leading, spacing: 4) {
-                Text(title)
-                Text(path)
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                    .lineLimit(2)
+        ViewThatFits(in: .horizontal) {
+            HStack(alignment: .firstTextBaseline) {
+                pathDescription
+                Spacer()
+                chooseButton
             }
 
-            Spacer()
-
-            Button("Choose") {
-                action()
+            VStack(alignment: .leading, spacing: 10) {
+                pathDescription
+                chooseButton
             }
             .buttonStyle(InteractiveButtonStyle())
+        }
+    }
+
+    private var pathDescription: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Text(title)
+            Text(path)
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .lineLimit(3)
+                .truncationMode(.middle)
+                .textSelection(.enabled)
+        }
+    }
+
+    private var chooseButton: some View {
+        Button("Choose") {
+            action()
         }
     }
 }
@@ -297,7 +456,7 @@ struct SubtitleArtifactSection: View {
                             .font(.caption)
                             .foregroundStyle(.secondary)
 
-                        HStack {
+                        AdaptiveButtonRow {
                             Button("Preview") {
                                 onPreview(artifact)
                             }

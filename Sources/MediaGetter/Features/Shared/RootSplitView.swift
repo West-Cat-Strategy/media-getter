@@ -5,6 +5,7 @@ import SwiftUI
 struct RootSplitView: View {
     @Bindable var appState: AppState
     @State private var hasEnteredWorkspace: Bool
+    @State private var isDropTargeted = false
 
     init(appState: AppState) {
         self._appState = Bindable(appState)
@@ -12,26 +13,39 @@ struct RootSplitView: View {
     }
 
     var body: some View {
-        ZStack {
-            if hasEnteredWorkspace {
-                WorkspaceShell(appState: appState) {
-                    workspaceView
-                }
+        ZStack(alignment: .bottom) {
+            ZStack {
+                if hasEnteredWorkspace {
+                    WorkspaceShell(appState: appState) {
+                        workspaceView
+                    }
                     .transition(.asymmetric(
                         insertion: .opacity.combined(with: .scale(scale: 1.02)),
                         removal: .opacity
                     ))
-            } else {
-                GatewayThresholdView {
-                    withAnimation(.spring(response: 0.72, dampingFraction: 0.88)) {
-                        hasEnteredWorkspace = true
+                } else {
+                    GatewayThresholdView {
+                        withAnimation(.spring(response: 0.72, dampingFraction: 0.88)) {
+                            hasEnteredWorkspace = true
+                        }
                     }
+                    .transition(.asymmetric(
+                        insertion: .opacity.combined(with: .scale(scale: 0.96)),
+                        removal: .opacity.combined(with: .scale(scale: 1.08))
+                    ))
                 }
-                .transition(.asymmetric(
-                    insertion: .opacity.combined(with: .scale(scale: 0.96)),
-                    removal: .opacity.combined(with: .scale(scale: 1.08))
-                ))
             }
+
+            if hasEnteredWorkspace && isDropTargeted {
+                WorkspaceDropOverlay(section: appState.selectedSection)
+                    .padding(.bottom, LayoutMetrics.compactPadding)
+                    .padding(.horizontal, LayoutMetrics.compactPadding)
+                    .transition(.move(edge: .bottom).combined(with: .opacity))
+            }
+        }
+        .animation(.easeInOut(duration: 0.16), value: isDropTargeted)
+        .onDrop(of: DropSupport.supportedTypeIdentifiers, isTargeted: $isDropTargeted) { providers in
+            handleDrop(providers)
         }
         .preferredColorScheme(.dark)
         .alert(
@@ -47,6 +61,23 @@ struct RootSplitView: View {
         } message: {
             Text(appState.alert?.message ?? "")
         }
+    }
+
+    private func handleDrop(_ providers: [NSItemProvider]) -> Bool {
+        let targetSection = appState.selectedSection
+
+        return DropSupport.handleURLOrTextProviders(
+            providers,
+            onFile: { fileURL in
+                appState.enqueueDroppedFiles([fileURL], for: targetSection)
+            },
+            onRemoteURL: { remoteURL in
+                appState.enqueueDroppedDownloadURLs([remoteURL.absoluteString])
+            },
+            onText: { text in
+                appState.enqueueDroppedDownloadText(text)
+            }
+        )
     }
 
     @ViewBuilder

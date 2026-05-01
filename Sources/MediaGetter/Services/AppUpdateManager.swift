@@ -26,6 +26,12 @@ enum AppUpdatePhase: Equatable {
     case failed
 }
 
+enum AppUpdateRetryAction {
+    case check
+    case download
+    case install
+}
+
 struct AppUpdateRelease: Equatable {
     let displayVersion: String
     let buildVersion: String
@@ -429,6 +435,10 @@ final class AppUpdateManager {
         pendingCancellation != nil
     }
 
+    var canRetryUpdateSession: Bool {
+        updatePhase == .failed && lastFailedUpdateAction != nil && canCheckForUpdates
+    }
+
     @ObservationIgnored
     private let updater: (any AppUpdaterControlling)?
 
@@ -443,6 +453,9 @@ final class AppUpdateManager {
 
     @ObservationIgnored
     private var pendingCancellation: (() -> Void)?
+
+    @ObservationIgnored
+    private var lastFailedUpdateAction: AppUpdateRetryAction?
 
     init(
         bundle: Bundle = .main,
@@ -506,12 +519,14 @@ final class AppUpdateManager {
 
     func checkForUpdates() {
         guard isUpdaterEnabled else { return }
+        lastFailedUpdateAction = nil
         openSettingsWindowIfPossible()
         updater?.checkForUpdates()
     }
 
     func performPrimaryUpdateAction() {
         if let pendingReadyToInstallReply {
+            lastFailedUpdateAction = nil
             self.pendingReadyToInstallReply = nil
             setInstallingStatus()
             pendingReadyToInstallReply(.install)
@@ -519,6 +534,7 @@ final class AppUpdateManager {
         }
 
         if let pendingDownloadDecisionReply {
+            lastFailedUpdateAction = nil
             self.pendingDownloadDecisionReply = nil
             setDownloadingStatus(preparing: true)
             pendingDownloadDecisionReply(.install)
@@ -563,6 +579,38 @@ final class AppUpdateManager {
         self.pendingCancellation = nil
         pendingCancellation()
         setIdleStatus(detail: "The update operation was cancelled.")
+    }
+
+    func retryUpdateSession() {
+        guard canRetryUpdateSession else { return }
+
+        switch lastFailedUpdateAction {
+        case .install:
+            if let pendingReadyToInstallReply {
+                lastFailedUpdateAction = nil
+                self.pendingReadyToInstallReply = nil
+                setInstallingStatus()
+                pendingReadyToInstallReply(.install)
+            } else {
+                setCheckingRetryStatus()
+                checkForUpdates()
+            }
+
+        case .download:
+            if let pendingDownloadDecisionReply {
+                lastFailedUpdateAction = nil
+                self.pendingDownloadDecisionReply = nil
+                setDownloadingStatus(preparing: true)
+                pendingDownloadDecisionReply(.install)
+            } else {
+                setCheckingRetryStatus()
+                checkForUpdates()
+            }
+
+        case .check, .none:
+            setCheckingRetryStatus()
+            checkForUpdates()
+        }
     }
 
     private func installObservers() {
@@ -672,6 +720,7 @@ final class AppUpdateManager {
             updateStatusDetail = message
 
         case .failed(let message):
+            lastFailedUpdateAction = failedActionForCurrentState()
             clearPendingActions()
             updatePhase = .failed
             updateStatusTitle = "Update failed"
@@ -679,6 +728,7 @@ final class AppUpdateManager {
 
         case .cancelled:
             clearPendingActions()
+            lastFailedUpdateAction = nil
             setIdleStatus(detail: "The update download was cancelled.")
 
         case .dismissed:
@@ -710,12 +760,44 @@ final class AppUpdateManager {
         updateStatusDetail = detail
     }
 
+    private func setCheckingRetryStatus() {
+        resetProgress()
+        updatePhase = .checking
+        updateStatusTitle = "Retrying update"
+        updateStatusDetail = "Checking the release feed again and resuming from the latest Sparkle state."
+    }
+
     private func clearPendingActions() {
         pendingCancellation = nil
         pendingDownloadDecisionReply = nil
         pendingReadyToInstallReply = nil
         resetProgress()
     }
+
+    private func failedActionForCurrentState() -> AppUpdateRetryAction {
+        if pendingReadyToInstallReply != nil || updatePhase == .readyToInstall || updatePhase == .installing {
+            return .install
+        }
+
+        if pendingDownloadDecisionReply != nil || availableUpdate != nil || updatePhase == .downloading || updatePhase == .extracting {
+            return .download
+        }
+
+        return .check
+    }
+
+#if DEBUG
+    func markFailedUpdateForTesting(
+        action: AppUpdateRetryAction,
+        message: String = "The update failed during testing."
+    ) {
+        clearPendingActions()
+        lastFailedUpdateAction = action
+        updatePhase = .failed
+        updateStatusTitle = "Update failed"
+        updateStatusDetail = message
+    }
+#endif
 
     private func resetProgress() {
         expectedDownloadBytes = nil

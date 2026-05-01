@@ -9,7 +9,10 @@ struct MediaGetterApp: App {
     var body: some Scene {
         WindowGroup {
             RootSplitView(appState: appState)
-                .frame(minWidth: 1180, minHeight: 760)
+                .frame(
+                    minWidth: LayoutMetrics.minimumWindowWidth,
+                    minHeight: LayoutMetrics.minimumWindowHeight
+                )
                 .task {
                     await appState.bootstrap()
                 }
@@ -20,7 +23,7 @@ struct MediaGetterApp: App {
 
         Settings {
             SettingsView(appState: appState, appUpdateManager: appUpdateManager)
-                .frame(width: 620, height: 640)
+                .frame(minWidth: 520, minHeight: 480)
                 .padding()
         }
     }

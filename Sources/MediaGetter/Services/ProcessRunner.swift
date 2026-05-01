@@ -1,3 +1,4 @@
+import Darwin
 import Foundation
 
 struct ProcessCommand {
@@ -39,23 +40,74 @@ enum ProcessRunnerError: LocalizedError {
 }
 
 actor OutputCollector {
-    private var stdoutLines: [String] = []
-    private var stderrLines: [String] = []
+    private var stdoutData = Data()
+    private var stderrData = Data()
 
-    func append(_ line: String, stream: ProcessOutputStream) {
+    func append(_ data: Data, stream: ProcessOutputStream) {
         switch stream {
         case .stdout:
-            stdoutLines.append(line)
+            stdoutData.append(data)
         case .stderr:
-            stderrLines.append(line)
+            stderrData.append(data)
         }
     }
 
     func snapshot(exitCode: Int32) -> ProcessResult {
-        let stdout = stdoutLines.joined(separator: "\n")
-        let stderr = stderrLines.joined(separator: "\n")
-        let combined = (stdoutLines + stderrLines).joined(separator: "\n")
+        let stdout = String(data: stdoutData, encoding: .utf8) ?? ""
+        let stderr = String(data: stderrData, encoding: .utf8) ?? ""
+        let combined = [stdout, stderr]
+            .filter { !$0.isEmpty }
+            .joined(separator: "\n")
         return ProcessResult(exitCode: exitCode, stdout: stdout, stderr: stderr, combinedOutput: combined)
+    }
+}
+
+private final class ProcessCancellationCoordinator: @unchecked Sendable {
+    private let lock = NSLock()
+    private weak var process: Process?
+    private var processIdentifier: pid_t?
+    private var didCancel = false
+
+    func register(_ process: Process) {
+        lock.lock()
+        self.process = process
+        self.processIdentifier = process.processIdentifier
+        let pid = process.processIdentifier
+        lock.unlock()
+
+        _ = setpgid(pid, pid)
+    }
+
+    func cancel() {
+        lock.lock()
+        didCancel = true
+        let process = self.process
+        let pid = self.processIdentifier
+        lock.unlock()
+
+        guard let process else { return }
+
+        if let pid {
+            _ = kill(-pid, SIGTERM)
+        }
+        if process.isRunning {
+            process.terminate()
+        }
+
+        usleep(300_000)
+
+        if let pid, process.isRunning {
+            _ = kill(-pid, SIGKILL)
+        }
+        if process.isRunning {
+            kill(process.processIdentifier, SIGKILL)
+        }
+    }
+
+    var isCancelled: Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        return didCancel
     }
 }
 
@@ -68,6 +120,7 @@ final class ProcessRunner: @unchecked Sendable {
         let stdoutPipe = Pipe()
         let stderrPipe = Pipe()
         let collector = OutputCollector()
+        let cancellationCoordinator = ProcessCancellationCoordinator()
 
         process.executableURL = command.executableURL
         process.arguments = command.arguments
@@ -81,40 +134,46 @@ final class ProcessRunner: @unchecked Sendable {
         process.standardError = stderrPipe
 
         let stdoutTask = Task {
-            for try await line in stdoutPipe.fileHandleForReading.bytes.lines {
-                await collector.append(line, stream: .stdout)
-                onOutput?(ProcessOutputLine(stream: .stdout, text: line))
-            }
+            try await Self.drain(
+                handle: stdoutPipe.fileHandleForReading,
+                stream: .stdout,
+                collector: collector,
+                onOutput: onOutput
+            )
         }
 
         let stderrTask = Task {
-            for try await line in stderrPipe.fileHandleForReading.bytes.lines {
-                await collector.append(line, stream: .stderr)
-                onOutput?(ProcessOutputLine(stream: .stderr, text: line))
-            }
+            try await Self.drain(
+                handle: stderrPipe.fileHandleForReading,
+                stream: .stderr,
+                collector: collector,
+                onOutput: onOutput
+            )
         }
 
         let exitCode = try await withTaskCancellationHandler {
+            try Task.checkCancellation()
             try process.run()
+            cancellationCoordinator.register(process)
+            stdoutPipe.fileHandleForWriting.closeFile()
+            stderrPipe.fileHandleForWriting.closeFile()
             return try await withCheckedThrowingContinuation { continuation in
                 process.terminationHandler = { terminatedProcess in
                     continuation.resume(returning: terminatedProcess.terminationStatus)
                 }
             }
         } onCancel: {
-            if process.isRunning {
-                process.terminate()
-                usleep(200_000)
-                if process.isRunning {
-                    kill(process.processIdentifier, SIGKILL)
-                }
-            }
+            cancellationCoordinator.cancel()
         }
 
-        stdoutPipe.fileHandleForReading.closeFile()
-        stderrPipe.fileHandleForReading.closeFile()
-        _ = try? await stdoutTask.value
-        _ = try? await stderrTask.value
+        if cancellationCoordinator.isCancelled {
+            _ = try? await stdoutTask.value
+            _ = try? await stderrTask.value
+            throw CancellationError()
+        }
+
+        try await stdoutTask.value
+        try await stderrTask.value
 
         let result = await collector.snapshot(exitCode: exitCode)
 
@@ -123,5 +182,47 @@ final class ProcessRunner: @unchecked Sendable {
         }
 
         return result
+    }
+
+    private static func drain(
+        handle: FileHandle,
+        stream: ProcessOutputStream,
+        collector: OutputCollector,
+        onOutput: (@Sendable (ProcessOutputLine) -> Void)?
+    ) async throws {
+        var bufferedLineData = Data()
+
+        while true {
+            let chunk = try handle.read(upToCount: 4_096) ?? Data()
+            if chunk.isEmpty {
+                break
+            }
+
+            await collector.append(chunk, stream: stream)
+
+            guard let onOutput else { continue }
+            bufferedLineData.append(chunk)
+
+            while let newlineIndex = bufferedLineData.firstIndex(of: 0x0A) {
+                let lineData = bufferedLineData.prefix(upTo: newlineIndex)
+                bufferedLineData.removeSubrange(...newlineIndex)
+                onOutput(
+                    ProcessOutputLine(
+                        stream: stream,
+                        text: String(decoding: lineData, as: UTF8.self)
+                            .trimmingCharacters(in: .newlines)
+                    )
+                )
+            }
+        }
+
+        guard let onOutput, !bufferedLineData.isEmpty else { return }
+        onOutput(
+            ProcessOutputLine(
+                stream: stream,
+                text: String(decoding: bufferedLineData, as: UTF8.self)
+                    .trimmingCharacters(in: .newlines)
+            )
+        )
     }
 }
