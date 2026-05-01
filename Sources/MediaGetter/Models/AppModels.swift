@@ -102,6 +102,15 @@ enum JobStatus: String, Codable {
         case .cancelled: .systemOrange
         }
     }
+
+    var isHistoryRecordable: Bool {
+        switch self {
+        case .completed, .failed, .cancelled:
+            true
+        case .pending, .running, .cancelling:
+            false
+        }
+    }
 }
 
 enum JobExecutionStage: String, Codable, Equatable {
@@ -751,9 +760,11 @@ struct DownloadRequest: Equatable {
     var filenameTemplate: String
     var overwriteExisting: Bool
     var resolvedAuth: ResolvedDownloadAuth?
+    var authProfileID: UUID? = nil
+    var authProfileName: String? = nil
 }
 
-struct ConvertRequest: Equatable {
+struct ConvertRequest: Codable, Equatable {
     var inputURL: URL
     var destinationDirectory: URL
     var preset: OutputPresetID
@@ -766,7 +777,7 @@ struct ConvertRequest: Equatable {
     var hardwareAcceleration: HardwareAccelerationMode
 }
 
-struct TrimRequest: Equatable {
+struct TrimRequest: Codable, Equatable {
     var inputURL: URL
     var destinationDirectory: URL
     var preset: OutputPresetID
@@ -776,7 +787,7 @@ struct TrimRequest: Equatable {
     var overwriteExisting: Bool
 }
 
-struct TranscribeRequest: Equatable {
+struct TranscribeRequest: Codable, Equatable {
     var inputURL: URL
     var destinationDirectory: URL
     var outputFormat: TranscriptionOutputFormat
@@ -800,7 +811,7 @@ enum XBrowser: String, Codable, CaseIterable, Identifiable {
     }
 }
 
-struct XMediaRequest: Equatable {
+struct XMediaRequest: Codable, Equatable {
     var handle: String
     var destinationDirectory: URL
     var browser: XBrowser
@@ -911,9 +922,136 @@ struct JobRecord: Identifiable, Equatable {
     }
 }
 
+struct HistoryDownloadAuthReference: Codable, Equatable {
+    var profileID: UUID
+    var profileName: String?
+}
+
+struct HistoryDownloadRerunRequest: Codable, Equatable {
+    var sourceURLString: String
+    var destinationDirectory: URL
+    var selectedFormatID: String
+    var preset: OutputPresetID
+    var subtitleWorkflow: SubtitleWorkflowOptions
+    var filenameTemplate: String
+    var overwriteExisting: Bool
+    var authReference: HistoryDownloadAuthReference?
+
+    init(request: DownloadRequest) {
+        sourceURLString = request.sourceURLString
+        destinationDirectory = request.destinationDirectory
+        selectedFormatID = request.selectedFormatID
+        preset = request.preset
+        subtitleWorkflow = request.subtitleWorkflow
+        filenameTemplate = request.filenameTemplate
+        overwriteExisting = request.overwriteExisting
+        authReference = request.authProfileID.map {
+            HistoryDownloadAuthReference(profileID: $0, profileName: request.authProfileName)
+        }
+    }
+}
+
+enum HistoryRerunPayload: Codable, Equatable {
+    case download(HistoryDownloadRerunRequest)
+    case xMedia(XMediaRequest)
+    case convert(ConvertRequest)
+    case trim(TrimRequest)
+    case transcribe(TranscribeRequest)
+
+    private enum CodingKeys: String, CodingKey {
+        case kind
+        case download
+        case xMedia
+        case convert
+        case trim
+        case transcribe
+    }
+
+    private enum Kind: String, Codable {
+        case download
+        case xMedia
+        case convert
+        case trim
+        case transcribe
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        let kind = try container.decode(Kind.self, forKey: .kind)
+
+        switch kind {
+        case .download:
+            self = .download(try container.decode(HistoryDownloadRerunRequest.self, forKey: .download))
+        case .xMedia:
+            self = .xMedia(try container.decode(XMediaRequest.self, forKey: .xMedia))
+        case .convert:
+            self = .convert(try container.decode(ConvertRequest.self, forKey: .convert))
+        case .trim:
+            self = .trim(try container.decode(TrimRequest.self, forKey: .trim))
+        case .transcribe:
+            self = .transcribe(try container.decode(TranscribeRequest.self, forKey: .transcribe))
+        }
+    }
+
+    func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+
+        switch self {
+        case .download(let request):
+            try container.encode(Kind.download, forKey: .kind)
+            try container.encode(request, forKey: .download)
+        case .xMedia(let request):
+            try container.encode(Kind.xMedia, forKey: .kind)
+            try container.encode(request, forKey: .xMedia)
+        case .convert(let request):
+            try container.encode(Kind.convert, forKey: .kind)
+            try container.encode(request, forKey: .convert)
+        case .trim(let request):
+            try container.encode(Kind.trim, forKey: .kind)
+            try container.encode(request, forKey: .trim)
+        case .transcribe(let request):
+            try container.encode(Kind.transcribe, forKey: .kind)
+            try container.encode(request, forKey: .transcribe)
+        }
+    }
+}
+
+struct HistoryRerunRequest: Codable, Equatable {
+    var kind: JobKind
+    var title: String
+    var subtitle: String
+    var source: MediaSource
+    var preset: OutputPresetID?
+    var transcriptionOutputFormat: TranscriptionOutputFormat?
+    var payload: HistoryRerunPayload
+
+    init(jobRequest: JobRequest) {
+        kind = jobRequest.kind
+        title = jobRequest.title
+        subtitle = jobRequest.subtitle
+        source = jobRequest.source
+        preset = jobRequest.preset
+        transcriptionOutputFormat = jobRequest.transcriptionOutputFormat
+
+        switch jobRequest.payload {
+        case .download(let request):
+            payload = .download(HistoryDownloadRerunRequest(request: request))
+        case .xMedia(let request):
+            payload = .xMedia(request)
+        case .convert(let request):
+            payload = .convert(request)
+        case .trim(let request):
+            payload = .trim(request)
+        case .transcribe(let request):
+            payload = .transcribe(request)
+        }
+    }
+}
+
 struct HistoryEntry: Codable, Equatable, Identifiable {
     var id: UUID
     var jobKind: JobKind
+    var status: JobStatus
     var title: String
     var subtitle: String
     var source: MediaSource
@@ -924,10 +1062,12 @@ struct HistoryEntry: Codable, Equatable, Identifiable {
     var preset: OutputPresetID?
     var transcriptionOutputFormat: TranscriptionOutputFormat?
     var summary: String
+    var rerunRequest: HistoryRerunRequest?
 
     init(
         id: UUID,
         jobKind: JobKind,
+        status: JobStatus = .completed,
         title: String,
         subtitle: String,
         source: MediaSource,
@@ -938,10 +1078,12 @@ struct HistoryEntry: Codable, Equatable, Identifiable {
         createdAt: Date,
         preset: OutputPresetID?,
         transcriptionOutputFormat: TranscriptionOutputFormat?,
-        summary: String
+        summary: String,
+        rerunRequest: HistoryRerunRequest? = nil
     ) {
         self.id = id
         self.jobKind = jobKind
+        self.status = status
         self.title = title
         self.subtitle = subtitle
         self.source = source
@@ -957,6 +1099,7 @@ struct HistoryEntry: Codable, Equatable, Identifiable {
         self.preset = preset
         self.transcriptionOutputFormat = transcriptionOutputFormat
         self.summary = summary
+        self.rerunRequest = rerunRequest
     }
 
     var outputPath: String? {
@@ -983,12 +1126,17 @@ struct HistoryEntry: Codable, Equatable, Identifiable {
         jobKind == .transcribe && parentJobID != nil
     }
 
+    var canRerun: Bool {
+        status.isHistoryRecordable && rerunRequest != nil
+    }
+
     init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         let legacyContainer = try decoder.container(keyedBy: LegacyCodingKeys.self)
 
         id = try container.decode(UUID.self, forKey: .id)
         jobKind = try container.decode(JobKind.self, forKey: .jobKind)
+        status = try container.decodeIfPresent(JobStatus.self, forKey: .status) ?? .completed
         title = try container.decode(String.self, forKey: .title)
         subtitle = try container.decode(String.self, forKey: .subtitle)
         source = try container.decode(MediaSource.self, forKey: .source)
@@ -998,6 +1146,7 @@ struct HistoryEntry: Codable, Equatable, Identifiable {
         preset = try container.decodeIfPresent(OutputPresetID.self, forKey: .preset)
         transcriptionOutputFormat = try container.decodeIfPresent(TranscriptionOutputFormat.self, forKey: .transcriptionOutputFormat)
         summary = try container.decode(String.self, forKey: .summary)
+        rerunRequest = try container.decodeIfPresent(HistoryRerunRequest.self, forKey: .rerunRequest)
 
         if let artifacts = try container.decodeIfPresent([JobArtifact].self, forKey: .artifacts) {
             self.artifacts = artifacts
@@ -1016,6 +1165,7 @@ struct HistoryEntry: Codable, Equatable, Identifiable {
         var container = encoder.container(keyedBy: CodingKeys.self)
         try container.encode(id, forKey: .id)
         try container.encode(jobKind, forKey: .jobKind)
+        try container.encode(status, forKey: .status)
         try container.encode(title, forKey: .title)
         try container.encode(subtitle, forKey: .subtitle)
         try container.encode(source, forKey: .source)
@@ -1027,6 +1177,7 @@ struct HistoryEntry: Codable, Equatable, Identifiable {
         try container.encodeIfPresent(preset, forKey: .preset)
         try container.encodeIfPresent(transcriptionOutputFormat, forKey: .transcriptionOutputFormat)
         try container.encode(summary, forKey: .summary)
+        try container.encodeIfPresent(rerunRequest, forKey: .rerunRequest)
     }
 
     private static func resolvedArtifacts(
@@ -1050,6 +1201,7 @@ struct HistoryEntry: Codable, Equatable, Identifiable {
     private enum CodingKeys: String, CodingKey {
         case id
         case jobKind
+        case status
         case title
         case subtitle
         case source
@@ -1061,6 +1213,7 @@ struct HistoryEntry: Codable, Equatable, Identifiable {
         case preset
         case transcriptionOutputFormat
         case summary
+        case rerunRequest
     }
 
     private enum LegacyCodingKeys: String, CodingKey {

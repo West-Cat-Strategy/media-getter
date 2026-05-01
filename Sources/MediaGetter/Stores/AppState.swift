@@ -194,8 +194,8 @@ final class AppState {
         guard !didBootstrap else { return }
         didBootstrap = true
 
-        queueStore.onCompleted = { [weak self] job in
-            self?.handleCompletedJob(job)
+        queueStore.onTerminal = { [weak self] job in
+            self?.handleTerminalJob(job)
         }
 
         queueStore.setExecutor { [weak self] request, onEvent in
@@ -625,6 +625,7 @@ final class AppState {
             return
         }
 
+        let authProfile = authProfileStore.profile(for: downloadDraft.selectedAuthProfileID)
         let request = DownloadRequest(
             sourceURLString: trimmedURL,
             destinationDirectory: URL(fileURLWithPath: currentDestinationPath(for: .download), isDirectory: true),
@@ -633,7 +634,9 @@ final class AppState {
             subtitleWorkflow: downloadDraft.subtitleWorkflow,
             filenameTemplate: downloadDraft.filenameTemplate.isEmpty ? preferencesStore.filenameTemplate : downloadDraft.filenameTemplate,
             overwriteExisting: preferencesStore.overwriteExisting,
-            resolvedAuth: resolvedAuth
+            resolvedAuth: resolvedAuth,
+            authProfileID: authProfile?.id,
+            authProfileName: authProfile?.name
         )
 
         let title = downloadDraft.metadata?.title ?? trimmedURL
@@ -743,6 +746,7 @@ final class AppState {
         downloadDraft.subtitleWorkflow = sanitizedSubtitleWorkflow(downloadDraft.subtitleWorkflow)
         guard validateSubtitleWorkflow(downloadDraft.subtitleWorkflow, preset: downloadDraft.selectedPreset) else { return }
 
+        let authProfile = authProfileStore.profile(for: downloadDraft.selectedAuthProfileID)
         for urlString in urls {
             let request = DownloadRequest(
                 sourceURLString: urlString,
@@ -752,7 +756,9 @@ final class AppState {
                 subtitleWorkflow: downloadDraft.subtitleWorkflow,
                 filenameTemplate: downloadDraft.filenameTemplate.isEmpty ? preferencesStore.filenameTemplate : downloadDraft.filenameTemplate,
                 overwriteExisting: preferencesStore.overwriteExisting,
-                resolvedAuth: resolvedAuth
+                resolvedAuth: resolvedAuth,
+                authProfileID: authProfile?.id,
+                authProfileName: authProfile?.name
             )
 
             queueStore.enqueue(
@@ -1218,8 +1224,125 @@ final class AppState {
         historyStore.selectedEntry
     }
 
-    private func handleCompletedJob(_ job: JobRecord) {
+    func rerunHistoryEntry(_ entry: HistoryEntry) {
+        guard let rerunRequest = entry.rerunRequest else {
+            alert = AppAlert(
+                title: "Rerun unavailable",
+                message: "This older history entry can still be loaded into a workspace, but it was not saved with a reusable request snapshot."
+            )
+            return
+        }
+
+        do {
+            let request = try makeRerunJobRequest(from: rerunRequest)
+            queueStore.enqueue(request)
+            selectedSection = .queue
+            inspectorMode = .logs
+        } catch {
+            alert = AppAlert(
+                title: "Could not rerun",
+                message: error.localizedDescription
+            )
+        }
+    }
+
+    private func handleTerminalJob(_ job: JobRecord) {
         historyStore.record(job: job)
+    }
+
+    private func makeRerunJobRequest(from rerunRequest: HistoryRerunRequest) throws -> JobRequest {
+        let workflowID = UUID()
+
+        switch rerunRequest.payload {
+        case .download(let request):
+            let auth = try resolveDownloadAuth(for: request.authReference)
+            let downloadRequest = DownloadRequest(
+                sourceURLString: request.sourceURLString,
+                destinationDirectory: request.destinationDirectory,
+                selectedFormatID: request.selectedFormatID,
+                preset: request.preset,
+                subtitleWorkflow: request.subtitleWorkflow,
+                filenameTemplate: request.filenameTemplate,
+                overwriteExisting: request.overwriteExisting,
+                resolvedAuth: auth,
+                authProfileID: request.authReference?.profileID,
+                authProfileName: request.authReference?.profileName
+            )
+
+            return JobRequest(
+                id: UUID(),
+                workflowID: workflowID,
+                parentJobID: nil,
+                kind: .download,
+                title: rerunRequest.title,
+                subtitle: rerunRequest.subtitle,
+                source: rerunRequest.source,
+                preset: rerunRequest.preset,
+                transcriptionOutputFormat: rerunRequest.transcriptionOutputFormat,
+                payload: .download(downloadRequest)
+            )
+
+        case .xMedia(let request):
+            return JobRequest(
+                id: UUID(),
+                workflowID: workflowID,
+                parentJobID: nil,
+                kind: .xMedia,
+                title: rerunRequest.title,
+                subtitle: rerunRequest.subtitle,
+                source: rerunRequest.source,
+                preset: rerunRequest.preset,
+                transcriptionOutputFormat: rerunRequest.transcriptionOutputFormat,
+                payload: .xMedia(request)
+            )
+
+        case .convert(let request):
+            return JobRequest(
+                id: UUID(),
+                workflowID: workflowID,
+                parentJobID: nil,
+                kind: .convert,
+                title: rerunRequest.title,
+                subtitle: rerunRequest.subtitle,
+                source: rerunRequest.source,
+                preset: rerunRequest.preset,
+                transcriptionOutputFormat: rerunRequest.transcriptionOutputFormat,
+                payload: .convert(request)
+            )
+
+        case .trim(let request):
+            return JobRequest(
+                id: UUID(),
+                workflowID: workflowID,
+                parentJobID: nil,
+                kind: .trim,
+                title: rerunRequest.title,
+                subtitle: rerunRequest.subtitle,
+                source: rerunRequest.source,
+                preset: rerunRequest.preset,
+                transcriptionOutputFormat: rerunRequest.transcriptionOutputFormat,
+                payload: .trim(request)
+            )
+
+        case .transcribe(let request):
+            return JobRequest(
+                id: UUID(),
+                workflowID: workflowID,
+                parentJobID: nil,
+                kind: .transcribe,
+                title: rerunRequest.title,
+                subtitle: rerunRequest.subtitle,
+                source: rerunRequest.source,
+                preset: rerunRequest.preset,
+                transcriptionOutputFormat: rerunRequest.transcriptionOutputFormat,
+                payload: .transcribe(request)
+            )
+        }
+    }
+
+    private func resolveDownloadAuth(for reference: HistoryDownloadAuthReference?) throws -> ResolvedDownloadAuth? {
+        guard let reference else { return nil }
+        return try authProfileStore.resolvedAuth(for: reference.profileID)
     }
 
     func makeAutoSubtitleJobRequest(for job: JobRecord) -> JobRequest? {
@@ -2200,6 +2323,7 @@ final class AppState {
             HistoryEntry(
                 id: mediaJob.id,
                 jobKind: .download,
+                status: .completed,
                 title: mediaJob.request.title,
                 subtitle: mediaJob.request.subtitle,
                 source: mediaJob.request.source,
@@ -2208,7 +2332,8 @@ final class AppState {
                 createdAt: now,
                 preset: .mp4Video,
                 transcriptionOutputFormat: nil,
-                summary: mediaJob.phase
+                summary: mediaJob.phase,
+                rerunRequest: HistoryRerunRequest(jobRequest: mediaRequest)
             )
         ]
         historyStore.selectedEntryID = historyStore.entries.first?.id

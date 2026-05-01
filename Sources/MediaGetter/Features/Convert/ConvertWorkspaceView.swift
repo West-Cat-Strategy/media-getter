@@ -5,91 +5,83 @@ struct ConvertWorkspaceView: View {
 
     var body: some View {
         WorkspaceContainer {
-                WorkspaceHeader(
-                    title: "Convert",
-                    subtitle: "Open a local file or a previous output, choose a small set of good presets, and keep advanced codec overrides tucked away until you need them."
-                )
+            WorkspaceHeader(
+                title: "Convert",
+                subtitle: "Choose a source file, pick an output preset, then add the conversion to the queue."
+            )
 
-                StudioCard {
-                    Text("Source file")
-                        .font(.headline)
+            WorkspaceSection(title: "Source") {
+                if let inputURL = appState.convertDraft.inputURL {
+                    CompactPathText(path: inputURL.path)
+                } else {
+                    Text("No file selected yet.")
+                        .font(.subheadline)
+                        .foregroundStyle(.secondary)
+                }
 
-                    if let inputURL = appState.convertDraft.inputURL {
-                        Text(inputURL.path)
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                    } else {
-                        Text("No file selected yet.")
-                            .foregroundStyle(.secondary)
+                AdaptiveButtonRow {
+                    Button("Open File") {
+                        appState.openMediaFileForCurrentSection()
                     }
+                    .buttonStyle(.borderedProminent)
+                    .accessibilityIdentifier(AccessibilityID.convertOpenButton)
 
-                    AdaptiveButtonRow {
-                        Button("Open File") {
-                            appState.openMediaFileForCurrentSection()
-                        }
-                        .buttonStyle(InteractiveButtonStyle())
-                        .accessibilityIdentifier(AccessibilityID.convertOpenButton)
-
-                        if appState.convertDraft.inputURL != nil {
-                            Button("Show Metadata") {
-                                appState.inspectorMode = .metadata
-                            }
-                            .buttonStyle(InteractiveButtonStyle())
+                    if appState.convertDraft.inputURL != nil {
+                        Button("Show Metadata") {
+                            appState.inspectorMode = .metadata
                         }
                     }
                 }
-                if let metadata = appState.convertDraft.metadata {
-                    MetadataSummaryCard(metadata: metadata)
+            }
+
+            if let metadata = appState.convertDraft.metadata {
+                MetadataSummaryCard(metadata: metadata)
+            }
+
+            WorkspaceSection(title: "Output") {
+                LazyVGrid(columns: [GridItem(.adaptive(minimum: 168), spacing: 12)], spacing: 12) {
+                    ForEach(OutputPresetID.convertPresets) { preset in
+                        PresetTile(
+                            preset: preset,
+                            isSelected: appState.convertDraft.selectedPreset == preset
+                        ) {
+                            appState.convertDraft.selectedPreset = preset
+                            appState.inspectorMode = .preset
+                        }
+                    }
                 }
 
-                StudioCard {
-                    Text("Preset")
-                        .font(.headline)
+                PathPickerRow(
+                    title: "Destination folder",
+                    path: appState.convertDraft.destinationDirectoryPath
+                ) {
+                    appState.chooseDestinationFolder(for: .convert)
+                }
 
-                    LazyVGrid(columns: [GridItem(.adaptive(minimum: 180), spacing: 14)], spacing: 14) {
-                        ForEach(OutputPresetID.convertPresets) { preset in
-                            PresetTile(
-                                preset: preset,
-                                isSelected: appState.convertDraft.selectedPreset == preset
-                            ) {
-                                appState.convertDraft.selectedPreset = preset
-                                appState.inspectorMode = .preset
-                            }
+                DisclosureGroup("Advanced codec options", isExpanded: $appState.convertDraft.showAdvanced) {
+                    VStack(alignment: .leading, spacing: 12) {
+                        TextField("Container override (optional)", text: $appState.convertDraft.containerOverride)
+                        TextField("Video codec override (optional)", text: $appState.convertDraft.videoCodecOverride)
+                        TextField("Audio codec override (optional)", text: $appState.convertDraft.audioCodecOverride)
+                        TextField("Audio bitrate override (optional)", text: $appState.convertDraft.audioBitrateOverride)
+                    }
+                    .textFieldStyle(.roundedBorder)
+                    .padding(.top, 8)
+                }
+
+                Toggle(
+                    "Generate subtitles after export",
+                    isOn: Binding(
+                        get: { appState.convertDraft.subtitleWorkflow.generatesSubtitles },
+                        set: {
+                            appState.convertDraft.subtitleWorkflow.sourcePolicy = $0 ? .generateOnly : .off
                         }
-                    }
-
-                    PathPickerRow(
-                        title: "Destination folder",
-                        path: appState.convertDraft.destinationDirectoryPath
-                    ) {
-                        appState.chooseDestinationFolder(for: .convert)
-                    }
-
-                    DisclosureGroup("Advanced options", isExpanded: $appState.convertDraft.showAdvanced) {
-                        VStack(alignment: .leading, spacing: 12) {
-                            TextField("Container override (optional)", text: $appState.convertDraft.containerOverride)
-                            TextField("Video codec override (optional)", text: $appState.convertDraft.videoCodecOverride)
-                            TextField("Audio codec override (optional)", text: $appState.convertDraft.audioCodecOverride)
-                            TextField("Audio bitrate override (optional)", text: $appState.convertDraft.audioBitrateOverride)
-                        }
-                        .textFieldStyle(.plain)
-                        .studioInputStyle()
-                        .padding(.top, 12)
-                    }
-
-                    Toggle(
-                        "Generate subtitles after export",
-                        isOn: Binding(
-                            get: { appState.convertDraft.subtitleWorkflow.generatesSubtitles },
-                            set: {
-                                appState.convertDraft.subtitleWorkflow.sourcePolicy = $0 ? .generateOnly : .off
-                            }
-                        )
                     )
-                    .toggleStyle(StudioToggleStyle())
-                    .accessibilityIdentifier(AccessibilityID.convertSubtitleToggle)
+                )
+                .accessibilityIdentifier(AccessibilityID.convertSubtitleToggle)
 
-                    if appState.convertDraft.subtitleWorkflow.generatesSubtitles {
+                if appState.convertDraft.subtitleWorkflow.generatesSubtitles {
+                    VStack(alignment: .leading, spacing: 12) {
                         Picker("Generated output", selection: $appState.convertDraft.subtitleWorkflow.outputFormat) {
                             ForEach(TranscriptionOutputFormat.subtitleFormats) { format in
                                 Text(format.title).tag(format)
@@ -100,10 +92,10 @@ struct ConvertWorkspaceView: View {
                             "Burn captions into exported video",
                             isOn: $appState.convertDraft.subtitleWorkflow.burnInVideo
                         )
-                        .toggleStyle(StudioToggleStyle())
 
                         if appState.convertDraft.selectedPreset.audioOnly {
                             Text("Caption burn-in only applies to video presets.")
+                                .font(.subheadline)
                                 .foregroundStyle(.secondary)
                         }
 
@@ -114,20 +106,23 @@ struct ConvertWorkspaceView: View {
                         .font(.subheadline.weight(.semibold))
 
                         Text(appState.transcriptionRuntimeDetail)
+                            .font(.subheadline)
                             .foregroundStyle(.secondary)
                     }
-
-                    Button("Add Convert Job") {
-                        appState.enqueueConvert()
-                    }
-                    .disabled(
-                        appState.convertDraft.inputURL == nil
-                            || (appState.convertDraft.subtitleWorkflow.needsLocalRuntime && !appState.isTranscriptionReady)
-                            || (appState.convertDraft.subtitleWorkflow.burnInVideo && appState.convertDraft.selectedPreset.audioOnly)
-                    )
-                    .buttonStyle(InteractiveButtonStyle())
-                    .accessibilityIdentifier(AccessibilityID.convertQueueButton)
+                    .padding(.leading, 2)
                 }
+
+                Button("Add Convert Job") {
+                    appState.enqueueConvert()
+                }
+                .buttonStyle(.borderedProminent)
+                .disabled(
+                    appState.convertDraft.inputURL == nil
+                        || (appState.convertDraft.subtitleWorkflow.needsLocalRuntime && !appState.isTranscriptionReady)
+                        || (appState.convertDraft.subtitleWorkflow.burnInVideo && appState.convertDraft.selectedPreset.audioOnly)
+                )
+                .accessibilityIdentifier(AccessibilityID.convertQueueButton)
+            }
         }
     }
 }

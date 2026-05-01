@@ -5,77 +5,74 @@ struct TranscribeWorkspaceView: View {
 
     var body: some View {
         WorkspaceContainer {
-                WorkspaceHeader(
-                    title: "Transcribe",
-                    subtitle: "Open a local or previously downloaded media file, then create a local English transcript with bundled Whisper output as text, SRT, or VTT."
-                )
+            WorkspaceHeader(
+                title: "Transcribe",
+                subtitle: "Create a local transcript or subtitle file from downloaded or local media."
+            )
 
-                StudioCard {
-                    Text("Source media")
-                        .font(.headline)
-
-                    if let inputURL = appState.transcribeDraft.inputURL {
-                        Text(inputURL.path)
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                    } else {
-                        Text("Open a local media file to prepare a transcript.")
-                            .foregroundStyle(.secondary)
-                    }
-
-                    AdaptiveButtonRow {
-                        Button("Open File") {
-                            appState.selectedSection = .transcribe
-                            appState.openMediaFileForCurrentSection()
-                        }
-                        .buttonStyle(InteractiveButtonStyle())
-                        .accessibilityIdentifier(AccessibilityID.transcribeOpenButton)
-
-                        if appState.transcribeDraft.inputURL != nil {
-                            Button("Show Metadata") {
-                                appState.inspectorMode = .metadata
-                            }
-                            .buttonStyle(InteractiveButtonStyle())
-                        }
-                    }
-                }
-                if let metadata = appState.transcribeDraft.metadata {
-                    MetadataSummaryCard(metadata: metadata)
-                }
-
-                StudioCard {
-                    Label(appState.transcriptionRuntimeSummary, systemImage: appState.isTranscriptionReady ? "waveform" : "exclamationmark.triangle")
-                        .font(.headline)
-
-                    Text(appState.transcriptionRuntimeDetail)
+            WorkspaceSection(title: "Source") {
+                if let inputURL = appState.transcribeDraft.inputURL {
+                    CompactPathText(path: inputURL.path)
+                } else {
+                    Text("Open a local media file to prepare a transcript.")
+                        .font(.subheadline)
                         .foregroundStyle(.secondary)
+                }
 
-                    Picker("Output format", selection: $appState.transcribeDraft.outputFormat) {
-                        ForEach(TranscriptionOutputFormat.allCases) { format in
-                            Text(format.title).tag(format)
+                AdaptiveButtonRow {
+                    Button("Open File") {
+                        appState.selectedSection = .transcribe
+                        appState.openMediaFileForCurrentSection()
+                    }
+                    .buttonStyle(.borderedProminent)
+                    .accessibilityIdentifier(AccessibilityID.transcribeOpenButton)
+
+                    if appState.transcribeDraft.inputURL != nil {
+                        Button("Show Metadata") {
+                            appState.inspectorMode = .metadata
                         }
                     }
-                    .accessibilityIdentifier(AccessibilityID.transcribeFormatPicker)
-
-                    Text("Selected: \(appState.transcribeDraft.outputFormat.title)")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                        .accessibilityIdentifier(AccessibilityID.transcribeFormatValue)
-
-                    PathPickerRow(
-                        title: "Destination folder",
-                        path: appState.transcribeDraft.destinationDirectoryPath
-                    ) {
-                        appState.chooseDestinationFolder(for: .transcribe)
-                    }
-
-                    Button("Add Transcription Job") {
-                        appState.enqueueTranscribe()
-                    }
-                    .disabled(appState.transcribeDraft.inputURL == nil || !appState.isTranscriptionReady)
-                    .buttonStyle(InteractiveButtonStyle())
-                    .accessibilityIdentifier(AccessibilityID.transcribeQueueButton)
                 }
+            }
+
+            if let metadata = appState.transcribeDraft.metadata {
+                MetadataSummaryCard(metadata: metadata)
+            }
+
+            WorkspaceSection(title: "Output") {
+                Label(appState.transcriptionRuntimeSummary, systemImage: appState.isTranscriptionReady ? "waveform" : "exclamationmark.triangle")
+                    .font(.headline)
+
+                Text(appState.transcriptionRuntimeDetail)
+                    .font(.subheadline)
+                    .foregroundStyle(.secondary)
+
+                Picker("Output format", selection: $appState.transcribeDraft.outputFormat) {
+                    ForEach(TranscriptionOutputFormat.allCases) { format in
+                        Text(format.title).tag(format)
+                    }
+                }
+                .accessibilityIdentifier(AccessibilityID.transcribeFormatPicker)
+
+                Text("Selected: \(appState.transcribeDraft.outputFormat.title)")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .accessibilityIdentifier(AccessibilityID.transcribeFormatValue)
+
+                PathPickerRow(
+                    title: "Destination folder",
+                    path: appState.transcribeDraft.destinationDirectoryPath
+                ) {
+                    appState.chooseDestinationFolder(for: .transcribe)
+                }
+
+                Button("Add Transcription Job") {
+                    appState.enqueueTranscribe()
+                }
+                .buttonStyle(.borderedProminent)
+                .disabled(appState.transcribeDraft.inputURL == nil || !appState.isTranscriptionReady)
+                .accessibilityIdentifier(AccessibilityID.transcribeQueueButton)
+            }
         }
     }
 }

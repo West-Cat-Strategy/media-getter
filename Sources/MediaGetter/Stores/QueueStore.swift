@@ -15,6 +15,7 @@ final class QueueStore {
     var jobs: [JobRecord] = []
     var selectedJobID: UUID?
     var onCompleted: (@MainActor (JobRecord) -> Void)?
+    var onTerminal: (@MainActor (JobRecord) -> Void)?
 
     func setExecutor(_ executor: @escaping JobExecutor) {
         self.executor = executor
@@ -64,6 +65,7 @@ final class QueueStore {
             jobs[index].stage = .cancelled
             jobs[index].phase = "Cancelled before start"
             jobs[index].completedAt = Date()
+            onTerminal?(jobs[index])
             return
         }
 
@@ -161,6 +163,7 @@ final class QueueStore {
         jobs[index].artifacts = result.artifacts
         jobs[index].completedAt = Date()
         onCompleted?(jobs[index])
+        onTerminal?(jobs[index])
     }
 
     private func markCancelled(jobID: UUID) {
@@ -169,6 +172,7 @@ final class QueueStore {
         jobs[index].stage = .cancelled
         jobs[index].phase = "Cancelled"
         jobs[index].completedAt = Date()
+        onTerminal?(jobs[index])
     }
 
     private func markFailed(jobID: UUID, error: Error) {
@@ -179,5 +183,6 @@ final class QueueStore {
         jobs[index].errorMessage = error.localizedDescription
         jobs[index].logs.append(error.localizedDescription)
         jobs[index].completedAt = Date()
+        onTerminal?(jobs[index])
     }
 }

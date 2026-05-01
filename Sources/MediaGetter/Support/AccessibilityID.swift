@@ -46,4 +46,5 @@ enum AccessibilityID {
     static let updateCancelButton = "update-cancel-button"
     static let updateRetryButton = "update-retry-button"
     static let historyList = "history-list"
+    static let historyEntryRerunButton = "history-entry-rerun-button"
 }

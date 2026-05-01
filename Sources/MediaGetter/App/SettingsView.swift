@@ -4,6 +4,9 @@ struct SettingsView: View {
     @Bindable var appState: AppState
     @Bindable var appUpdateManager: AppUpdateManager
     @State private var isAuthSheetPresented = false
+    @State private var isUpdateDetailsExpanded = false
+    @State private var isToolchainDetailsExpanded = false
+    @State private var isTranscriptionDetailsExpanded = false
 
     var body: some View {
         Form {
@@ -44,10 +47,13 @@ struct SettingsView: View {
                                     .foregroundStyle(.secondary)
                             }
                             if let releaseNotes = availableUpdate.releaseNotes {
-                                Text(releaseNotes)
-                                    .font(.caption)
-                                    .foregroundStyle(.secondary)
-                                    .lineLimit(5)
+                                DisclosureGroup("Release notes", isExpanded: $isUpdateDetailsExpanded) {
+                                    Text(releaseNotes)
+                                        .font(.caption)
+                                        .foregroundStyle(.secondary)
+                                        .fixedSize(horizontal: false, vertical: true)
+                                        .padding(.top, 4)
+                                }
                             }
                         }
                         .padding(.top, 2)
@@ -209,34 +215,38 @@ struct SettingsView: View {
                     Text("Tool validation will appear after the app launches from a built bundle.")
                         .foregroundStyle(.secondary)
                 } else {
-                    ForEach(appState.toolVersions) { version in
-                        VStack(alignment: .leading, spacing: 4) {
-                            Text(version.tool.displayName)
-                                .font(.headline)
-                            Text(version.versionString)
-                            if version.architecture.isAppleSiliconReady {
-                                Text(version.architecture.title)
-                                    .foregroundStyle(.green)
-                            } else {
-                                Text(version.architecture.title)
-                                    .foregroundStyle(.secondary)
+                    DisclosureGroup("Tool details", isExpanded: $isToolchainDetailsExpanded) {
+                        VStack(alignment: .leading, spacing: 12) {
+                            ForEach(appState.toolVersions) { version in
+                                VStack(alignment: .leading, spacing: 4) {
+                                    Text(version.tool.displayName)
+                                        .font(.headline)
+                                    Text(version.versionString)
+                                    if version.architecture.isAppleSiliconReady {
+                                        Text(version.architecture.title)
+                                            .foregroundStyle(.green)
+                                    } else {
+                                        Text(version.architecture.title)
+                                            .foregroundStyle(.secondary)
+                                    }
+                                    if version.isSelfContained {
+                                        Text(version.linkageStatus.title)
+                                            .foregroundStyle(.green)
+                                    } else {
+                                        Text(version.linkageStatus.title)
+                                            .foregroundStyle(.secondary)
+                                    }
+                                    Text(version.sourceDescription)
+                                        .foregroundStyle(.secondary)
+                                    Text(version.linkageDetail)
+                                        .foregroundStyle(.secondary)
+                                    Text(version.executablePath)
+                                        .font(.caption)
+                                        .foregroundStyle(.secondary)
+                                }
                             }
-                            if version.isSelfContained {
-                                Text(version.linkageStatus.title)
-                                    .foregroundStyle(.green)
-                            } else {
-                                Text(version.linkageStatus.title)
-                                    .foregroundStyle(.secondary)
-                            }
-                            Text(version.sourceDescription)
-                                .foregroundStyle(.secondary)
-                            Text(version.linkageDetail)
-                                .foregroundStyle(.secondary)
-                            Text(version.executablePath)
-                                .font(.caption)
-                                .foregroundStyle(.secondary)
                         }
-                        .padding(.vertical, 4)
+                        .padding(.top, 4)
                     }
                 }
             }
@@ -250,39 +260,42 @@ struct SettingsView: View {
                 }
                 .padding(.vertical, 4)
 
-                if let whisperTool = appState.toolVersions.first(where: { $0.tool == .whisperCLI }) {
-                    VStack(alignment: .leading, spacing: 4) {
-                        Text(whisperTool.tool.displayName)
-                            .font(.headline)
-                        Text(whisperTool.versionString)
-                        Text(whisperTool.executablePath)
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                    }
-                    .padding(.vertical, 4)
-                } else {
-                    Text("whisper-cli is not bundled yet.")
-                        .foregroundStyle(.secondary)
-                }
-
-                ForEach(appState.bundledAssetStatuses) { status in
-                    VStack(alignment: .leading, spacing: 4) {
-                        Text(status.asset.displayName)
-                            .font(.headline)
-                        if status.isAvailable {
-                            Text("Available")
-                                .foregroundStyle(.green)
+                DisclosureGroup("Runtime files", isExpanded: $isTranscriptionDetailsExpanded) {
+                    VStack(alignment: .leading, spacing: 12) {
+                        if let whisperTool = appState.toolVersions.first(where: { $0.tool == .whisperCLI }) {
+                            VStack(alignment: .leading, spacing: 4) {
+                                Text(whisperTool.tool.displayName)
+                                    .font(.headline)
+                                Text(whisperTool.versionString)
+                                Text(whisperTool.executablePath)
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                            }
                         } else {
-                            Text("Missing")
+                            Text("whisper-cli is not bundled yet.")
                                 .foregroundStyle(.secondary)
                         }
-                        Text(status.detail)
-                            .foregroundStyle(.secondary)
-                        Text(status.path)
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
+
+                        ForEach(appState.bundledAssetStatuses) { status in
+                            VStack(alignment: .leading, spacing: 4) {
+                                Text(status.asset.displayName)
+                                    .font(.headline)
+                                if status.isAvailable {
+                                    Text("Available")
+                                        .foregroundStyle(.green)
+                                } else {
+                                    Text("Missing")
+                                        .foregroundStyle(.secondary)
+                                }
+                                Text(status.detail)
+                                    .foregroundStyle(.secondary)
+                                Text(status.path)
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                            }
+                        }
                     }
-                    .padding(.vertical, 4)
+                    .padding(.top, 4)
                 }
             }
 

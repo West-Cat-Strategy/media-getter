@@ -20,6 +20,32 @@ private final class LockedProcessOutputLines: @unchecked Sendable {
 }
 
 final class MediaGetterTests: XCTestCase {
+    func testAboutCreditsExposeOpenSourceAttributionLinks() {
+        let credits = MediaGetterAboutPanel.credits()
+        let expectedURLs: Set<URL> = [
+            MediaGetterAboutPanel.westCatURL,
+            MediaGetterAboutPanel.githubURL,
+            MediaGetterAboutPanel.ytDlpURL,
+            MediaGetterAboutPanel.ffmpegURL
+        ]
+
+        var actualURLs = Set<URL>()
+        credits.enumerateAttribute(
+            .link,
+            in: NSRange(location: 0, length: credits.length)
+        ) { value, _, _ in
+            if let url = value as? URL {
+                actualURLs.insert(url)
+            }
+        }
+
+        XCTAssertEqual(actualURLs, expectedURLs)
+        XCTAssertTrue(credits.string.contains("Media-Getter is an open source project by West Cat Strategy (westcat.ca)."))
+        XCTAssertTrue(credits.string.contains("GitHub repository"))
+        XCTAssertTrue(credits.string.contains("yt-dlp"))
+        XCTAssertTrue(credits.string.contains("ffmpeg"))
+    }
+
     @MainActor
     func testAppUpdateManagerDisabledModeIsNoOp() {
         let updater = FakeAppUpdater(
@@ -222,6 +248,176 @@ final class MediaGetterTests: XCTestCase {
         XCTAssertEqual(store.jobs.first?.progress, 0)
         XCTAssertNil(store.jobs.first?.completedAt)
         XCTAssertTrue(store.jobs.first?.logs.isEmpty == true)
+    }
+
+    @MainActor
+    func testHistoryRecordsTerminalJobsWithRerunSnapshots() throws {
+        let root = try makeTemporaryDirectory()
+        let store = HistoryStore(persistenceURL: root.appendingPathComponent("history.json"))
+        let statuses: [JobStatus] = [.completed, .failed, .cancelled]
+
+        for status in statuses {
+            var request = makeQueueJobRequest()
+            request.id = UUID()
+            let job = JobRecord(
+                id: request.id,
+                request: request,
+                status: status,
+                stage: status == .completed ? .completed : (status == .failed ? .failed : .cancelled),
+                progress: status == .completed ? 1 : 0.4,
+                phase: status.title,
+                logs: [],
+                artifacts: [],
+                createdAt: Date(),
+                startedAt: Date(),
+                completedAt: Date(),
+                errorMessage: status == .failed ? "Failed" : nil
+            )
+
+            store.record(job: job)
+        }
+
+        XCTAssertEqual(store.entries.count, statuses.count)
+        XCTAssertEqual(Set(store.entries.map(\.status)), Set(statuses))
+        XCTAssertTrue(store.entries.allSatisfy(\.canRerun))
+        XCTAssertTrue(store.entries.allSatisfy { entry in
+            guard case .some(.convert) = entry.rerunRequest?.payload else { return false }
+            return true
+        })
+    }
+
+    @MainActor
+    func testRerunHistoryDownloadClonesFreshJobAndPreservesSettings() throws {
+        let root = try makeTemporaryDirectory()
+        let authStore = AuthProfileStore(
+            persistenceURL: root.appendingPathComponent("auth_profiles.json"),
+            profilesDirectoryURL: root.appendingPathComponent("AuthProfiles", isDirectory: true),
+            secretStore: InMemorySecretStore()
+        )
+        let profile = try authStore.saveProfile(
+            from: DownloadAuthProfileDraft(
+                name: "Browser Auth",
+                strategyKind: .browser,
+                browser: .safari,
+                markAsDefault: true
+            )
+        )
+        let appState = try makeIsolatedAppState(root: root, authStore: authStore)
+        let originalRequest = JobRequest(
+            workflowID: UUID(),
+            kind: .download,
+            title: "Example Download",
+            subtitle: OutputPresetID.mp4Video.title,
+            source: .remote("https://example.com/watch?v=rerun"),
+            preset: .mp4Video,
+            transcriptionOutputFormat: nil,
+            payload: .download(
+                DownloadRequest(
+                    sourceURLString: "https://example.com/watch?v=rerun",
+                    destinationDirectory: root,
+                    selectedFormatID: "137+140",
+                    preset: .mp4Video,
+                    subtitleWorkflow: SubtitleWorkflowOptions(sourcePolicy: .preferSourceThenGenerate, outputFormat: .srt),
+                    filenameTemplate: "%(title)s",
+                    overwriteExisting: true,
+                    resolvedAuth: .browser(BrowserDownloadAuthConfiguration(browser: .safari, profile: nil, container: nil)),
+                    authProfileID: profile.id,
+                    authProfileName: profile.name
+                )
+            )
+        )
+        let entry = HistoryEntry(
+            id: originalRequest.id,
+            jobKind: .download,
+            status: .completed,
+            title: originalRequest.title,
+            subtitle: originalRequest.subtitle,
+            source: originalRequest.source,
+            workflowID: originalRequest.workflowID,
+            artifacts: [],
+            createdAt: Date(),
+            preset: .mp4Video,
+            transcriptionOutputFormat: nil,
+            summary: "Done",
+            rerunRequest: HistoryRerunRequest(jobRequest: originalRequest)
+        )
+
+        appState.rerunHistoryEntry(entry)
+
+        XCTAssertEqual(appState.queueStore.jobs.count, 1)
+        let rerun = try XCTUnwrap(appState.queueStore.selectedJob?.request)
+        XCTAssertNotEqual(rerun.id, originalRequest.id)
+        XCTAssertNotEqual(rerun.workflowID, originalRequest.workflowID)
+        XCTAssertNil(rerun.parentJobID)
+        XCTAssertEqual(appState.selectedSection, .queue)
+
+        guard case .download(let request) = rerun.payload else {
+            return XCTFail("Expected a download rerun.")
+        }
+
+        XCTAssertEqual(request.sourceURLString, "https://example.com/watch?v=rerun")
+        XCTAssertEqual(request.selectedFormatID, "137+140")
+        XCTAssertEqual(request.subtitleWorkflow.sourcePolicy, .preferSourceThenGenerate)
+        XCTAssertEqual(request.subtitleWorkflow.outputFormat, .srt)
+        XCTAssertEqual(request.authProfileID, profile.id)
+        XCTAssertEqual(request.authProfileName, "Browser Auth")
+        XCTAssertEqual(request.resolvedAuth, .browser(BrowserDownloadAuthConfiguration(browser: .safari, profile: nil, container: nil)))
+        XCTAssertNil(appState.alert)
+    }
+
+    @MainActor
+    func testRerunAutoSubtitleHistoryEntryQueuesStandaloneTranscription() throws {
+        let appState = try makeIsolatedAppState()
+        let parentID = UUID()
+        let inputURL = URL(fileURLWithPath: "/tmp/source-video.mp4")
+        let transcribeRequest = TranscribeRequest(
+            inputURL: inputURL,
+            destinationDirectory: URL(fileURLWithPath: "/tmp", isDirectory: true),
+            outputFormat: .srt,
+            overwriteExisting: true
+        )
+        let originalRequest = JobRequest(
+            workflowID: UUID(),
+            parentJobID: parentID,
+            kind: .transcribe,
+            title: "source-video.mp4",
+            subtitle: "Auto subtitles (.srt)",
+            source: .local(inputURL),
+            preset: nil,
+            transcriptionOutputFormat: .srt,
+            payload: .transcribe(transcribeRequest)
+        )
+        let entry = HistoryEntry(
+            id: originalRequest.id,
+            jobKind: .transcribe,
+            status: .completed,
+            title: originalRequest.title,
+            subtitle: originalRequest.subtitle,
+            source: originalRequest.source,
+            workflowID: originalRequest.workflowID,
+            parentJobID: parentID,
+            artifacts: [],
+            createdAt: Date(),
+            preset: nil,
+            transcriptionOutputFormat: .srt,
+            summary: "Done",
+            rerunRequest: HistoryRerunRequest(jobRequest: originalRequest)
+        )
+
+        appState.rerunHistoryEntry(entry)
+
+        let rerun = try XCTUnwrap(appState.queueStore.selectedJob?.request)
+        XCTAssertEqual(rerun.kind, .transcribe)
+        XCTAssertNil(rerun.parentJobID)
+        XCTAssertNotEqual(rerun.workflowID, originalRequest.workflowID)
+        XCTAssertFalse(rerun.isAutoSubtitleJob)
+
+        guard case .transcribe(let request) = rerun.payload else {
+            return XCTFail("Expected a transcription rerun.")
+        }
+
+        XCTAssertEqual(request.inputURL, inputURL)
+        XCTAssertEqual(request.outputFormat, .srt)
     }
 
     @MainActor

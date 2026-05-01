@@ -17,11 +17,12 @@ final class HistoryStore {
     }
 
     func record(job: JobRecord) {
-        guard job.status == .completed else { return }
+        guard job.status.isHistoryRecordable else { return }
 
         let entry = HistoryEntry(
             id: job.id,
             jobKind: job.request.kind,
+            status: job.status,
             title: job.request.title,
             subtitle: job.request.subtitle,
             source: job.request.source,
@@ -31,7 +32,8 @@ final class HistoryStore {
             createdAt: job.completedAt ?? Date(),
             preset: job.request.preset,
             transcriptionOutputFormat: job.request.transcriptionOutputFormat,
-            summary: job.phase
+            summary: job.phase,
+            rerunRequest: HistoryRerunRequest(jobRequest: job.request)
         )
 
         entries.removeAll { $0.id == entry.id }

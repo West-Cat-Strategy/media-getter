@@ -6,63 +6,59 @@ struct TrimWorkspaceView: View {
 
     var body: some View {
         WorkspaceContainer {
-                WorkspaceHeader(
-                    title: "Trim",
-                    subtitle: "Preview one local clip, set precise in and out points, and export a short segment with fast copy when it is safe."
-                )
+            WorkspaceHeader(
+                title: "Trim",
+                subtitle: "Preview one clip, mark the range, and export a short segment."
+            )
 
-                StudioCard {
-                    Text("Clip source")
-                        .font(.headline)
-
-                    if let inputURL = appState.trimDraft.inputURL {
-                        Text(inputURL.path)
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                    } else {
-                        Text("Open a file to start trimming.")
-                            .foregroundStyle(.secondary)
-                    }
-
-                    Button("Open Clip") {
-                        appState.selectedSection = .trim
-                        appState.openMediaFileForCurrentSection()
-                    }
-                    .buttonStyle(InteractiveButtonStyle())
-                    .accessibilityIdentifier(AccessibilityID.trimOpenButton)
+            WorkspaceSection(title: "Source") {
+                if let inputURL = appState.trimDraft.inputURL {
+                    CompactPathText(path: inputURL.path)
+                } else {
+                    Text("Open a file to start trimming.")
+                        .font(.subheadline)
+                        .foregroundStyle(.secondary)
                 }
-                StudioCard {
-                    Picker("Trim preset", selection: $appState.trimDraft.selectedPreset) {
-                        ForEach(OutputPresetID.trimPresets) { preset in
-                            Text(preset.title).tag(preset)
-                        }
+
+                Button("Open Clip") {
+                    appState.selectedSection = .trim
+                    appState.openMediaFileForCurrentSection()
+                }
+                .buttonStyle(.borderedProminent)
+                .accessibilityIdentifier(AccessibilityID.trimOpenButton)
+            }
+
+            WorkspaceSection(title: "Export") {
+                Picker("Trim preset", selection: $appState.trimDraft.selectedPreset) {
+                    ForEach(OutputPresetID.trimPresets) { preset in
+                        Text(preset.title).tag(preset)
                     }
-                    .onChange(of: appState.trimDraft.selectedPreset) { _, _ in
+                }
+                .onChange(of: appState.trimDraft.selectedPreset) { _, _ in
+                    appState.refreshTrimPlan()
+                }
+
+                Toggle("Prefer stream copy when safe", isOn: Binding(
+                    get: { appState.trimDraft.allowFastCopy },
+                    set: {
+                        appState.trimDraft.allowFastCopy = $0
                         appState.refreshTrimPlan()
                     }
+                ))
 
-                    Toggle("Prefer stream copy when safe", isOn: Binding(
-                        get: { appState.trimDraft.allowFastCopy },
+                Toggle(
+                    "Generate subtitles after export",
+                    isOn: Binding(
+                        get: { appState.trimDraft.subtitleWorkflow.generatesSubtitles },
                         set: {
-                            appState.trimDraft.allowFastCopy = $0
-                            appState.refreshTrimPlan()
+                            appState.trimDraft.subtitleWorkflow.sourcePolicy = $0 ? .generateOnly : .off
                         }
-                    ))
-                    .toggleStyle(StudioToggleStyle())
-
-                    Toggle(
-                        "Generate subtitles after export",
-                        isOn: Binding(
-                            get: { appState.trimDraft.subtitleWorkflow.generatesSubtitles },
-                            set: {
-                                appState.trimDraft.subtitleWorkflow.sourcePolicy = $0 ? .generateOnly : .off
-                            }
-                        )
                     )
-                    .toggleStyle(StudioToggleStyle())
-                    .accessibilityIdentifier(AccessibilityID.trimSubtitleToggle)
+                )
+                .accessibilityIdentifier(AccessibilityID.trimSubtitleToggle)
 
-                    if appState.trimDraft.subtitleWorkflow.generatesSubtitles {
+                if appState.trimDraft.subtitleWorkflow.generatesSubtitles {
+                    VStack(alignment: .leading, spacing: 12) {
                         Picker("Generated output", selection: $appState.trimDraft.subtitleWorkflow.outputFormat) {
                             ForEach(TranscriptionOutputFormat.subtitleFormats) { format in
                                 Text(format.title).tag(format)
@@ -73,7 +69,6 @@ struct TrimWorkspaceView: View {
                             "Burn captions into exported video",
                             isOn: $appState.trimDraft.subtitleWorkflow.burnInVideo
                         )
-                        .toggleStyle(StudioToggleStyle())
 
                         Label(
                             appState.transcriptionRuntimeSummary,
@@ -82,125 +77,91 @@ struct TrimWorkspaceView: View {
                         .font(.subheadline.weight(.semibold))
 
                         Text(appState.transcriptionRuntimeDetail)
+                            .font(.subheadline)
                             .foregroundStyle(.secondary)
                     }
+                    .padding(.leading, 2)
+                }
 
-                    PathPickerRow(
-                        title: "Destination folder",
-                        path: appState.trimDraft.destinationDirectoryPath
-                    ) {
-                        appState.chooseDestinationFolder(for: .trim)
-                    }
+                PathPickerRow(
+                    title: "Destination folder",
+                    path: appState.trimDraft.destinationDirectoryPath
+                ) {
+                    appState.chooseDestinationFolder(for: .trim)
+                }
 
+                VStack(alignment: .leading, spacing: 4) {
                     Text("Strategy: \(appState.trimDraft.currentPlan.strategy.rawValue)")
-                        .font(.headline)
+                        .font(.subheadline.weight(.semibold))
                     Text(appState.trimDraft.currentPlan.reason)
+                        .font(.subheadline)
                         .foregroundStyle(.secondary)
-
-                    Button("Add Trim Job") {
-                        appState.enqueueTrim()
-                    }
-                    .disabled(
-                        appState.trimDraft.inputURL == nil
-                            || (appState.trimDraft.subtitleWorkflow.needsLocalRuntime && !appState.isTranscriptionReady)
-                    )
-                    .buttonStyle(InteractiveButtonStyle())
-                    .accessibilityIdentifier(AccessibilityID.trimQueueButton)
                 }
 
-                if appState.trimDraft.inputURL != nil {
-                    StudioCard {
-                        VideoPlayer(player: appState.trimPlayer)
-                            .frame(height: 340)
-                            .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+                Button("Add Trim Job") {
+                    appState.enqueueTrim()
+                }
+                .buttonStyle(.borderedProminent)
+                .disabled(
+                    appState.trimDraft.inputURL == nil
+                        || (appState.trimDraft.subtitleWorkflow.needsLocalRuntime && !appState.isTranscriptionReady)
+                )
+                .accessibilityIdentifier(AccessibilityID.trimQueueButton)
+            }
 
-                        if let duration = appState.trimDraft.metadata?.duration {
-                            VStack(alignment: .leading, spacing: 12) {
-                                Slider(
-                                    value: Binding(
-                                        get: { appState.trimDraft.playerPosition },
-                                        set: { appState.seekTrimPlayer(to: $0) }
-                                    ),
-                                    in: 0...max(duration, 0.1)
-                                )
+            if appState.trimDraft.inputURL != nil {
+                WorkspaceSection(title: "Preview") {
+                    VideoPlayer(player: appState.trimPlayer)
+                        .frame(minHeight: 220, idealHeight: 300, maxHeight: 320)
+                        .clipShape(RoundedRectangle(cornerRadius: LayoutMetrics.cardCornerRadius, style: .continuous))
 
-                                ViewThatFits(in: .horizontal) {
-                                    HStack {
-                                        Text("Playhead \(Formatters.timecode(appState.trimDraft.playerPosition))")
-                                            .font(.caption)
-                                            .foregroundStyle(.secondary)
-                                        Spacer()
-                                        trimMarkButtons
-                                    }
-
-                                    VStack(alignment: .leading, spacing: 10) {
-                                        Text("Playhead \(Formatters.timecode(appState.trimDraft.playerPosition))")
-                                            .font(.caption)
-                                            .foregroundStyle(.secondary)
-                                        trimMarkButtons
-                                    }
-                                }
-                                .buttonStyle(InteractiveButtonStyle())
-                            }
-                        }
-                    }
-
-                    StudioCard {
-                        Text("Timeline")
-                            .font(.headline)
-
-                        if appState.trimDraft.isLoadingThumbnails {
-                            ProgressView("Generating timeline thumbnails…")
-                        } else {
-                            TrimTimelineView(
-                                frames: appState.trimDraft.timelineFrames,
-                                range: appState.trimDraft.range,
-                                duration: appState.trimDraft.metadata?.duration ?? 1
+                    if let duration = appState.trimDraft.metadata?.duration {
+                        VStack(alignment: .leading, spacing: 12) {
+                            Slider(
+                                value: Binding(
+                                    get: { appState.trimDraft.playerPosition },
+                                    set: { appState.seekTrimPlayer(to: $0) }
+                                ),
+                                in: 0...max(duration, 0.1)
                             )
-                        }
 
-                        Grid(alignment: .leadingFirstTextBaseline, horizontalSpacing: 16, verticalSpacing: 12) {
-                            GridRow {
-                                Text("Start")
-                                    .foregroundStyle(.secondary)
-                                TextField(
-                                    "00:00:00.00",
-                                    text: Binding(
-                                        get: { Formatters.timecode(appState.trimDraft.range.start) },
-                                        set: { appState.updateTrimStart(from: $0) }
-                                    )
-                                )
-                                .textFieldStyle(.plain)
-                                .studioInputStyle()
+                            ViewThatFits(in: .horizontal) {
+                                HStack {
+                                    playheadLabel
+                                    Spacer()
+                                    trimMarkButtons
+                                }
 
-                                Button("-0.5s") { appState.nudgeTrimStart(by: -0.5) }
-                                    .buttonStyle(InteractiveButtonStyle())
-                                Button("+0.5s") { appState.nudgeTrimStart(by: 0.5) }
-                                    .buttonStyle(InteractiveButtonStyle())
-                            }
-
-                            GridRow {
-                                Text("End")
-                                    .foregroundStyle(.secondary)
-                                TextField(
-                                    "00:00:00.00",
-                                    text: Binding(
-                                        get: { Formatters.timecode(appState.trimDraft.range.end) },
-                                        set: { appState.updateTrimEnd(from: $0) }
-                                    )
-                                )
-                                .textFieldStyle(.plain)
-                                .studioInputStyle()
-
-                                Button("-0.5s") { appState.nudgeTrimEnd(by: -0.5) }
-                                    .buttonStyle(InteractiveButtonStyle())
-                                Button("+0.5s") { appState.nudgeTrimEnd(by: 0.5) }
-                                    .buttonStyle(InteractiveButtonStyle())
+                                VStack(alignment: .leading, spacing: 10) {
+                                    playheadLabel
+                                    trimMarkButtons
+                                }
                             }
                         }
                     }
                 }
+
+                WorkspaceSection(title: "Timeline") {
+                    if appState.trimDraft.isLoadingThumbnails {
+                        ProgressView("Generating timeline thumbnails...")
+                    } else {
+                        TrimTimelineView(
+                            frames: appState.trimDraft.timelineFrames,
+                            range: appState.trimDraft.range,
+                            duration: appState.trimDraft.metadata?.duration ?? 1
+                        )
+                    }
+
+                    trimTimeInputs
+                }
+            }
         }
+    }
+
+    private var playheadLabel: some View {
+        Text("Playhead \(Formatters.timecode(appState.trimDraft.playerPosition))")
+            .font(.caption)
+            .foregroundStyle(.secondary)
     }
 
     private var trimMarkButtons: some View {
@@ -210,6 +171,69 @@ struct TrimWorkspaceView: View {
             }
             Button("Mark Out") {
                 appState.setTrimEndToCurrentPosition()
+            }
+        }
+    }
+
+    private var trimTimeInputs: some View {
+        ViewThatFits(in: .horizontal) {
+            Grid(alignment: .leadingFirstTextBaseline, horizontalSpacing: 12, verticalSpacing: 10) {
+                trimTimeGridRow(title: "Start", text: Binding(
+                    get: { Formatters.timecode(appState.trimDraft.range.start) },
+                    set: { appState.updateTrimStart(from: $0) }
+                ), nudgeBack: { appState.nudgeTrimStart(by: -0.5) }, nudgeForward: { appState.nudgeTrimStart(by: 0.5) })
+
+                trimTimeGridRow(title: "End", text: Binding(
+                    get: { Formatters.timecode(appState.trimDraft.range.end) },
+                    set: { appState.updateTrimEnd(from: $0) }
+                ), nudgeBack: { appState.nudgeTrimEnd(by: -0.5) }, nudgeForward: { appState.nudgeTrimEnd(by: 0.5) })
+            }
+
+            VStack(alignment: .leading, spacing: 12) {
+                trimTimeStackRow(title: "Start", text: Binding(
+                    get: { Formatters.timecode(appState.trimDraft.range.start) },
+                    set: { appState.updateTrimStart(from: $0) }
+                ), nudgeBack: { appState.nudgeTrimStart(by: -0.5) }, nudgeForward: { appState.nudgeTrimStart(by: 0.5) })
+
+                trimTimeStackRow(title: "End", text: Binding(
+                    get: { Formatters.timecode(appState.trimDraft.range.end) },
+                    set: { appState.updateTrimEnd(from: $0) }
+                ), nudgeBack: { appState.nudgeTrimEnd(by: -0.5) }, nudgeForward: { appState.nudgeTrimEnd(by: 0.5) })
+            }
+        }
+        .textFieldStyle(.roundedBorder)
+    }
+
+    private func trimTimeGridRow(
+        title: String,
+        text: Binding<String>,
+        nudgeBack: @escaping () -> Void,
+        nudgeForward: @escaping () -> Void
+    ) -> some View {
+        GridRow {
+            Text(title)
+                .foregroundStyle(.secondary)
+            TextField("00:00:00.00", text: text)
+                .frame(minWidth: 120)
+            Button("-0.5s", action: nudgeBack)
+            Button("+0.5s", action: nudgeForward)
+        }
+    }
+
+    private func trimTimeStackRow(
+        title: String,
+        text: Binding<String>,
+        nudgeBack: @escaping () -> Void,
+        nudgeForward: @escaping () -> Void
+    ) -> some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Text(title)
+                .foregroundStyle(.secondary)
+            TextField("00:00:00.00", text: text)
+                .frame(maxWidth: 180)
+            AdaptiveButtonRow {
+                Button("-0.5s", action: nudgeBack)
+                Button("+0.5s", action: nudgeForward)
             }
         }
     }
@@ -229,8 +253,8 @@ private struct TrimTimelineView: View {
                             .resizable()
                             .scaledToFill()
                             .frame(maxWidth: .infinity)
-                            .frame(height: 88)
-                            .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+                            .frame(height: 78)
+                            .clipShape(RoundedRectangle(cornerRadius: LayoutMetrics.cardCornerRadius, style: .continuous))
                     }
                 }
 
@@ -238,12 +262,12 @@ private struct TrimTimelineView: View {
                 let selectionStart = max(0, min(range.start / max(duration, 0.1), 1)) * width
                 let selectionWidth = max(8, (range.duration / max(duration, 0.1)) * width)
 
-                RoundedRectangle(cornerRadius: 12, style: .continuous)
+                RoundedRectangle(cornerRadius: LayoutMetrics.cardCornerRadius, style: .continuous)
                     .strokeBorder(Color.accentColor, lineWidth: 3)
-                    .frame(width: selectionWidth, height: 96)
+                    .frame(width: selectionWidth, height: 86)
                     .offset(x: selectionStart)
             }
         }
-        .frame(height: 96)
+        .frame(height: 86)
     }
 }

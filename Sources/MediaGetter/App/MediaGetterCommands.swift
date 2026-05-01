@@ -1,3 +1,4 @@
+import AppKit
 import SwiftUI
 
 struct MediaGetterCommands: Commands {
@@ -6,6 +7,12 @@ struct MediaGetterCommands: Commands {
 
     var body: some Commands {
         SidebarCommands()
+
+        CommandGroup(replacing: .appInfo) {
+            Button("About MediaGetter") {
+                MediaGetterAboutPanel.show()
+            }
+        }
 
         CommandGroup(after: .appInfo) {
             Button(appUpdateManager.primaryUpdateActionTitle) {

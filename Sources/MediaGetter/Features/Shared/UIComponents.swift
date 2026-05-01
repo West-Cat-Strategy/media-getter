@@ -6,6 +6,7 @@ enum LayoutMetrics {
     static let workspaceMaxWidth: CGFloat = 980
     static let compactPadding: CGFloat = 16
     static let regularPadding: CGFloat = 24
+    static let cardCornerRadius: CGFloat = 18
 }
 
 struct WorkspaceContainer<Content: View>: View {
@@ -209,6 +210,47 @@ struct WorkspaceHeader: View {
             Text(subtitle)
                 .foregroundStyle(.secondary)
         }
+    }
+}
+
+struct WorkspaceSection<Content: View>: View {
+    var title: String?
+    var subtitle: String?
+    @ViewBuilder var content: Content
+
+    var body: some View {
+        StudioCard {
+            if title != nil || subtitle != nil {
+                VStack(alignment: .leading, spacing: 4) {
+                    if let title {
+                        Text(title)
+                            .font(.headline)
+                    }
+
+                    if let subtitle {
+                        Text(subtitle)
+                            .font(.subheadline)
+                            .foregroundStyle(.secondary)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                }
+            }
+
+            content
+        }
+    }
+}
+
+struct CompactPathText: View {
+    let path: String
+
+    var body: some View {
+        Text(path)
+            .font(.caption)
+            .foregroundStyle(.secondary)
+            .lineLimit(2)
+            .truncationMode(.middle)
+            .textSelection(.enabled)
     }
 }
 
