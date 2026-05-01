@@ -1,13 +1,25 @@
 import SwiftUI
-import UniformTypeIdentifiers
 
 struct DownloadWorkspaceView: View {
     @Bindable var appState: AppState
     @State private var isAuthSheetPresented = false
 
+    private var downloadURLBinding: Binding<String> {
+        Binding(
+            get: { appState.downloadDraft.urlString },
+            set: { appState.updateDownloadURL($0) }
+        )
+    }
+
+    private var selectedAuthProfileBinding: Binding<UUID?> {
+        Binding(
+            get: { appState.downloadDraft.selectedAuthProfileID },
+            set: { appState.updateSelectedDownloadAuthProfileID($0) }
+        )
+    }
+
     var body: some View {
-        ScrollView {
-            VStack(alignment: .leading, spacing: 24) {
+        WorkspaceContainer {
                 WorkspaceHeader(
                     title: "Download",
                     subtitle: "Paste a public media URL, inspect the available formats, and add a clean download job to the queue."
@@ -17,11 +29,11 @@ struct DownloadWorkspaceView: View {
                     Text("Paste or drop a public media URL")
                         .font(.headline)
 
-                    TextField("https://example.com/video", text: $appState.downloadDraft.urlString)
+                    TextField("https://example.com/video", text: downloadURLBinding)
                         .textFieldStyle(.roundedBorder)
                         .accessibilityIdentifier(AccessibilityID.downloadURLField)
 
-                    Picker("Authentication", selection: $appState.downloadDraft.selectedAuthProfileID) {
+                    Picker("Authentication", selection: selectedAuthProfileBinding) {
                         Text("No auth")
                             .tag(UUID?.none)
 
@@ -41,7 +53,7 @@ struct DownloadWorkspaceView: View {
                     }
                     .accessibilityElement(children: .combine)
 
-                    HStack {
+                    AdaptiveButtonRow {
                         Button("Paste URL") {
                             appState.pasteURLFromClipboard()
                         }
@@ -51,8 +63,6 @@ struct DownloadWorkspaceView: View {
                         }
                         .disabled(appState.downloadDraft.isProbing)
                         .accessibilityIdentifier(AccessibilityID.downloadInspectButton)
-
-                        Spacer()
 
                         Button("Show Metadata") {
                             appState.inspectorMode = .metadata
@@ -65,23 +75,16 @@ struct DownloadWorkspaceView: View {
                         .accessibilityIdentifier(AccessibilityID.downloadConfigureAuthButton)
                     }
                 }
-                .onDrop(of: [UTType.url.identifier, UTType.fileURL.identifier, UTType.text.identifier], isTargeted: nil) { providers in
-                    DropSupport.handleURLOrTextProviders(
-                        providers,
-                        onFile: { fileURL in
-                            appState.downloadDraft.urlString = fileURL.absoluteString
-                        },
-                        onText: { string in
-                            appState.downloadDraft.urlString = string
-                        }
-                    )
-                }
                 .sheet(isPresented: $isAuthSheetPresented) {
                     DownloadAuthProfileSheet(
                         appState: appState,
                         context: .download,
                         initialProfileID: appState.downloadDraft.selectedAuthProfileID
                     )
+                }
+
+                if let inlineStatus = appState.downloadInlineStatus {
+                    DownloadInlineStatusCard(appState: appState, status: inlineStatus)
                 }
 
                 StudioCard {
@@ -189,8 +192,49 @@ struct DownloadWorkspaceView: View {
                         }
                     }
                 }
+        }
+    }
+}
+
+private struct DownloadInlineStatusCard: View {
+    @Bindable var appState: AppState
+    let status: DownloadInlineStatus
+
+    var body: some View {
+        StudioCard {
+            VStack(alignment: .leading, spacing: 14) {
+                Text(status.title)
+                    .font(.headline)
+                    .accessibilityIdentifier(AccessibilityID.downloadInlineStatusTitle)
+
+                Text(status.message)
+                    .foregroundStyle(.secondary)
+                    .accessibilityIdentifier(AccessibilityID.downloadInlineStatusMessage)
+
+                if let progress = status.progress {
+                    ProgressView(value: progress)
+                        .accessibilityIdentifier(AccessibilityID.downloadInlineProgress)
+                } else if status.isIndeterminate {
+                    ProgressView()
+                        .accessibilityIdentifier(AccessibilityID.downloadInlineProgress)
+                }
+
+                AdaptiveButtonRow {
+                    if let queueButtonTitle = status.queueButtonTitle {
+                        Button(queueButtonTitle) {
+                            appState.openQueueFromDownloadStatus()
+                        }
+                        .accessibilityIdentifier(AccessibilityID.downloadInlineOpenQueueButton)
+                    }
+
+                    if let cancellableJobID = status.cancellableJobID {
+                        Button("Cancel") {
+                            appState.cancelDownloadStatusJob(cancellableJobID)
+                        }
+                        .accessibilityIdentifier(AccessibilityID.downloadInlineCancelButton)
+                    }
+                }
             }
-            .frame(maxWidth: 980, alignment: .leading)
         }
     }
 }

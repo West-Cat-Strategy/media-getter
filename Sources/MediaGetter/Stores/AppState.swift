@@ -1,5 +1,6 @@
 import AVFoundation
 import AppKit
+import CryptoKit
 import Foundation
 import Observation
 
@@ -18,6 +19,55 @@ private struct MediaPipelineProgressPlan {
 private struct ResolvedSubtitleArtifacts {
     var artifacts: [JobArtifact]
     var canonicalSubtitleArtifact: JobArtifact?
+}
+
+private struct DownloadSourceContext: Equatable {
+    var normalizedURLString: String?
+    var selectedAuthProfileID: UUID?
+}
+
+struct DownloadInlineStatus {
+    var title: String
+    var message: String
+    var progress: Double?
+    var isIndeterminate: Bool
+    var queueButtonTitle: String?
+    var cancellableJobID: UUID?
+}
+
+private extension ResolvedDownloadAuth {
+    var freshnessFingerprint: String {
+        let canonicalValue: String
+
+        switch self {
+        case .browser(let configuration):
+            canonicalValue = [
+                "browser",
+                configuration.browser.rawValue,
+                configuration.profile ?? "",
+                configuration.container ?? ""
+            ]
+            .joined(separator: "|")
+
+        case .cookieFile(let path):
+            canonicalValue = "cookieFile|\(path)"
+
+        case .advancedHeaders(let cookieHeader, let userAgent, let headers):
+            let headerValue = headers
+                .map { "\($0.trimmedName):\($0.trimmedValue)" }
+                .joined(separator: "|")
+            canonicalValue = [
+                "advancedHeaders",
+                cookieHeader,
+                userAgent ?? "",
+                headerValue
+            ]
+            .joined(separator: "|")
+        }
+
+        let digest = SHA256.hash(data: Data(canonicalValue.utf8))
+        return digest.map { String(format: "%02x", $0) }.joined()
+    }
 }
 
 @MainActor
@@ -72,6 +122,9 @@ final class AppState {
 
     @ObservationIgnored
     private let thumbnailService: ThumbnailService
+
+    @ObservationIgnored
+    private var activeDownloadProbeSessionID = UUID()
 
     init(
         preferencesStore: PreferencesStore = PreferencesStore(),
@@ -167,12 +220,11 @@ final class AppState {
         }
 
         selectedSection = .download
-        downloadDraft.urlString = clipboardValue
+        updateDownloadURL(clipboardValue)
     }
 
     func probeDownloadURL() async {
-        let trimmedURL = downloadDraft.urlString.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmedURL.isEmpty else {
+        guard let trimmedURL = normalizedDownloadURLString(downloadDraft.urlString) else {
             alert = AppAlert(title: "Missing URL", message: "Paste a public media URL to inspect available formats.")
             return
         }
@@ -184,17 +236,29 @@ final class AppState {
             return
         }
 
-        downloadDraft.isProbing = true
-        defer { downloadDraft.isProbing = false }
+        invalidateDownloadProbeState()
+        let authFingerprint = downloadAuthFingerprint(for: resolvedAuth)
+        let probeSessionID = beginDownloadProbeStatus(
+            title: "Inspecting URL",
+            message: "Checking available formats for the current source."
+        )
+        defer { finishDownloadProbeStatus(probeSessionID) }
 
         do {
             let metadata = try await downloadProbeService.probe(urlString: trimmedURL, auth: resolvedAuth)
-            downloadDraft.metadata = metadata
-            if let preferredFormat = metadata.formats.first(where: { $0.hasVideo && $0.hasAudio }) ?? metadata.formats.first {
-                downloadDraft.selectedFormatID = preferredFormat.id
-            }
+            guard isCurrentDownloadProbeSession(probeSessionID) else { return }
+            applySuccessfulDownloadProbe(
+                metadata: metadata,
+                resolvedAuth: resolvedAuth,
+                probedURLString: trimmedURL,
+                authFingerprint: authFingerprint,
+                title: "Inspection complete",
+                message: "Review the formats below and add the download job when you're ready."
+            )
             inspectorMode = .metadata
         } catch {
+            guard isCurrentDownloadProbeSession(probeSessionID) else { return }
+            clearDownloadProbeStatus()
             alert = AppAlert(title: "Could not inspect URL", message: error.localizedDescription)
         }
     }
@@ -211,9 +275,15 @@ final class AppState {
     @discardableResult
     func saveAuthProfile(_ draft: DownloadAuthProfileDraft, selectForDownload: Bool) -> DownloadAuthProfile? {
         do {
+            let selectedProfileBeforeSave = downloadDraft.selectedAuthProfileID
             let profile = try authProfileStore.saveProfile(from: draft)
             if selectForDownload {
-                downloadDraft.selectedAuthProfileID = profile.id
+                updateSelectedDownloadAuthProfileID(profile.id)
+                if selectedProfileBeforeSave == profile.id {
+                    invalidateDownloadProbeState()
+                }
+            } else if downloadDraft.selectedAuthProfileID == profile.id {
+                invalidateDownloadProbeState()
             }
             return profile
         } catch {
@@ -226,7 +296,7 @@ final class AppState {
         do {
             try authProfileStore.deleteProfile(id: profileID)
             if downloadDraft.selectedAuthProfileID == profileID {
-                downloadDraft.selectedAuthProfileID = nil
+                updateSelectedDownloadAuthProfileID(nil)
             }
         } catch {
             alert = AppAlert(title: "Could not delete auth profile", message: error.localizedDescription)
@@ -236,7 +306,7 @@ final class AppState {
     func setDefaultAuthProfile(_ profileID: UUID?) {
         authProfileStore.setDefaultProfile(id: profileID)
         if downloadDraft.selectedAuthProfileID == nil {
-            downloadDraft.selectedAuthProfileID = profileID
+            updateSelectedDownloadAuthProfileID(profileID)
         }
     }
 
@@ -260,9 +330,93 @@ final class AppState {
         return "\(profile.strategyTitle) • \(profile.summary)"
     }
 
+    func updateDownloadURL(_ urlString: String) {
+        let previousContext = currentDownloadSourceContext()
+        downloadDraft.urlString = urlString
+        invalidateDownloadProbeIfNeeded(from: previousContext)
+    }
+
+    func updateSelectedDownloadAuthProfileID(_ profileID: UUID?) {
+        let previousContext = currentDownloadSourceContext()
+        downloadDraft.selectedAuthProfileID = profileID
+        invalidateDownloadProbeIfNeeded(from: previousContext)
+    }
+
+    var downloadInlineStatus: DownloadInlineStatus? {
+        if let job = currentDownloadInlineJob() {
+            let title: String
+            switch job.status {
+            case .pending:
+                title = "Download queued"
+            case .running:
+                title = "Download in progress"
+            case .cancelling:
+                title = "Download cancelling"
+            case .completed:
+                title = "Download finished"
+            case .failed:
+                title = "Download failed"
+            case .cancelled:
+                title = "Download cancelled"
+            }
+
+            return DownloadInlineStatus(
+                title: title,
+                message: job.phase,
+                progress: job.progress,
+                isIndeterminate: false,
+                queueButtonTitle: "Open Queue",
+                cancellableJobID: (job.status == .pending || job.status == .running) ? job.id : nil
+            )
+        }
+
+        guard let title = downloadDraft.probeStatusTitle,
+              let message = downloadDraft.probeStatusMessage else {
+            return nil
+        }
+
+        return DownloadInlineStatus(
+            title: title,
+            message: message,
+            progress: nil,
+            isIndeterminate: downloadDraft.isProbing,
+            queueButtonTitle: nil,
+            cancellableJobID: nil
+        )
+    }
+
+    func openQueueFromDownloadStatus() {
+        selectedSection = .queue
+        inspectorMode = .logs
+    }
+
+    func cancelDownloadStatusJob(_ jobID: UUID) {
+        queueStore.cancel(jobID: jobID)
+    }
+
+    func applySuccessfulDownloadProbe(
+        metadata: MediaMetadata,
+        resolvedAuth: ResolvedDownloadAuth?,
+        probedURLString: String? = nil,
+        authFingerprint: String? = nil,
+        title: String,
+        message: String
+    ) {
+        downloadDraft.metadata = metadata
+        downloadDraft.lastProbedURLString = probedURLString ?? normalizedDownloadURLString(downloadDraft.urlString)
+        downloadDraft.lastProbedAuthFingerprint = authFingerprint ?? downloadAuthFingerprint(for: resolvedAuth)
+        downloadDraft.probeStatusTitle = title
+        downloadDraft.probeStatusMessage = message
+
+        if let preferredFormat = metadata.formats.first(where: { $0.hasVideo && $0.hasAudio }) ?? metadata.formats.first {
+            downloadDraft.selectedFormatID = preferredFormat.id
+        } else {
+            downloadDraft.selectedFormatID = DownloadDraft.automaticFormatID
+        }
+    }
+
     func testDownloadAuthProfile(_ draft: DownloadAuthProfileDraft) async {
-        let trimmedURL = downloadDraft.urlString.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmedURL.isEmpty else {
+        guard let trimmedURL = normalizedDownloadURLString(downloadDraft.urlString) else {
             alert = AppAlert(title: "Missing URL", message: "Paste a media URL before testing authentication.")
             return
         }
@@ -275,18 +429,30 @@ final class AppState {
             return
         }
 
-        downloadDraft.isProbing = true
-        defer { downloadDraft.isProbing = false }
+        invalidateDownloadProbeState()
+        let authFingerprint = downloadAuthFingerprint(for: resolvedAuth)
+        let probeSessionID = beginDownloadProbeStatus(
+            title: "Testing authentication",
+            message: "Checking the current URL with the selected auth settings."
+        )
+        defer { finishDownloadProbeStatus(probeSessionID) }
 
         do {
             let metadata = try await downloadProbeService.probe(urlString: trimmedURL, auth: resolvedAuth)
-            downloadDraft.metadata = metadata
-            if let preferredFormat = metadata.formats.first(where: { $0.hasVideo && $0.hasAudio }) ?? metadata.formats.first {
-                downloadDraft.selectedFormatID = preferredFormat.id
-            }
+            guard isCurrentDownloadProbeSession(probeSessionID) else { return }
+            applySuccessfulDownloadProbe(
+                metadata: metadata,
+                resolvedAuth: resolvedAuth,
+                probedURLString: trimmedURL,
+                authFingerprint: authFingerprint,
+                title: "Authentication works",
+                message: "The current URL inspected successfully with this profile."
+            )
             inspectorMode = .metadata
             alert = AppAlert(title: "Authentication works", message: "The current URL inspected successfully with this profile.")
         } catch {
+            guard isCurrentDownloadProbeSession(probeSessionID) else { return }
+            clearDownloadProbeStatus()
             alert = AppAlert(title: "Could not test authentication", message: error.localizedDescription)
         }
     }
@@ -415,8 +581,7 @@ final class AppState {
     }
 
     func enqueueDownload() {
-        let trimmedURL = downloadDraft.urlString.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmedURL.isEmpty else {
+        guard let trimmedURL = normalizedDownloadURLString(downloadDraft.urlString) else {
             alert = AppAlert(title: "Missing URL", message: "Paste a public media URL first.")
             return
         }
@@ -430,6 +595,21 @@ final class AppState {
 
         downloadDraft.subtitleWorkflow = sanitizedSubtitleWorkflow(downloadDraft.subtitleWorkflow)
         guard validateSubtitleWorkflow(downloadDraft.subtitleWorkflow, preset: downloadDraft.selectedPreset) else { return }
+        guard downloadDraft.metadata != nil else {
+            alert = AppAlert(
+                title: "Inspect URL first",
+                message: "Inspect the current URL to load fresh formats before adding a download job."
+            )
+            return
+        }
+        guard hasFreshDownloadMetadata(for: resolvedAuth) else {
+            invalidateDownloadProbeState()
+            alert = AppAlert(
+                title: "Inspect URL again",
+                message: "The current URL or authentication settings changed since the last inspection. Inspect it again to refresh available formats."
+            )
+            return
+        }
 
         let request = DownloadRequest(
             sourceURLString: trimmedURL,
@@ -454,6 +634,56 @@ final class AppState {
                 payload: .download(request)
             )
         )
+        selectedSection = .queue
+        inspectorMode = .logs
+    }
+
+    func enqueueDroppedDownloadText(_ text: String) {
+        enqueueDroppedDownloadURLs(remoteURLStrings(in: text))
+    }
+
+    func enqueueDroppedDownloadURLs(_ urlStrings: [String]) {
+        let urls = uniqueRemoteDownloadURLStrings(urlStrings)
+        guard !urls.isEmpty else {
+            alert = AppAlert(title: "No downloadable URL found", message: "Drop an http or https media URL from your browser.")
+            return
+        }
+
+        let resolvedAuth: ResolvedDownloadAuth?
+        do {
+            resolvedAuth = try resolveSelectedDownloadAuthForCurrentDraft()
+        } catch {
+            return
+        }
+
+        downloadDraft.subtitleWorkflow = sanitizedSubtitleWorkflow(downloadDraft.subtitleWorkflow)
+        guard validateSubtitleWorkflow(downloadDraft.subtitleWorkflow, preset: downloadDraft.selectedPreset) else { return }
+
+        for urlString in urls {
+            let request = DownloadRequest(
+                sourceURLString: urlString,
+                destinationDirectory: URL(fileURLWithPath: currentDestinationPath(for: .download), isDirectory: true),
+                selectedFormatID: DownloadDraft.automaticFormatID,
+                preset: downloadDraft.selectedPreset,
+                subtitleWorkflow: downloadDraft.subtitleWorkflow,
+                filenameTemplate: downloadDraft.filenameTemplate.isEmpty ? preferencesStore.filenameTemplate : downloadDraft.filenameTemplate,
+                overwriteExisting: preferencesStore.overwriteExisting,
+                resolvedAuth: resolvedAuth
+            )
+
+            queueStore.enqueue(
+                JobRequest(
+                    kind: .download,
+                    title: URL(string: urlString)?.host(percentEncoded: false) ?? urlString,
+                    subtitle: request.preset.title,
+                    source: .remote(urlString),
+                    preset: request.preset,
+                    transcriptionOutputFormat: nil,
+                    payload: .download(request)
+                )
+            )
+        }
+
         selectedSection = .queue
         inspectorMode = .logs
     }
@@ -491,6 +721,66 @@ final class AppState {
                 payload: .convert(request)
             )
         )
+        selectedSection = .queue
+        inspectorMode = .logs
+    }
+
+    func enqueueDroppedFiles(_ urls: [URL]) {
+        enqueueDroppedFiles(urls, for: selectedSection)
+    }
+
+    func enqueueDroppedFiles(_ urls: [URL], for targetSection: AppSection) {
+        let fileURLs = urls.filter(\.isFileURL)
+        guard !fileURLs.isEmpty else { return }
+
+        switch targetSection {
+        case .transcribe:
+            enqueueDroppedTranscriptionFiles(fileURLs)
+        case .trim:
+            if let firstFileURL = fileURLs.first {
+                Task {
+                    await loadLocalFile(firstFileURL, for: .trim)
+                }
+            }
+        case .download, .convert, .queue, .history:
+            enqueueDroppedConvertFiles(fileURLs)
+        }
+    }
+
+    func enqueueDroppedConvertFiles(_ urls: [URL]) {
+        let fileURLs = urls.filter(\.isFileURL)
+        guard !fileURLs.isEmpty else { return }
+
+        convertDraft.subtitleWorkflow = sanitizedSubtitleWorkflow(convertDraft.subtitleWorkflow)
+        guard validateSubtitleWorkflow(convertDraft.subtitleWorkflow, preset: convertDraft.selectedPreset) else { return }
+
+        for inputURL in fileURLs {
+            let request = ConvertRequest(
+                inputURL: inputURL,
+                destinationDirectory: URL(fileURLWithPath: currentDestinationPath(for: .convert), isDirectory: true),
+                preset: convertDraft.selectedPreset,
+                subtitleWorkflow: convertDraft.subtitleWorkflow,
+                containerOverride: convertDraft.containerOverride,
+                videoCodecOverride: convertDraft.videoCodecOverride,
+                audioCodecOverride: convertDraft.audioCodecOverride,
+                audioBitrateOverride: convertDraft.audioBitrateOverride,
+                overwriteExisting: preferencesStore.overwriteExisting,
+                hardwareAcceleration: preferencesStore.hardwareAcceleration
+            )
+
+            queueStore.enqueue(
+                JobRequest(
+                    kind: .convert,
+                    title: inputURL.lastPathComponent,
+                    subtitle: request.preset.title,
+                    source: .local(inputURL),
+                    preset: request.preset,
+                    transcriptionOutputFormat: nil,
+                    payload: .convert(request)
+                )
+            )
+        }
+
         selectedSection = .queue
         inspectorMode = .logs
     }
@@ -559,6 +849,30 @@ final class AppState {
         inspectorMode = .logs
     }
 
+    func enqueueDroppedTranscriptionFiles(_ urls: [URL]) {
+        let fileURLs = urls.filter(\.isFileURL)
+        guard !fileURLs.isEmpty else { return }
+
+        guard isTranscriptionReady else {
+            alert = AppAlert(title: "Transcription runtime incomplete", message: transcriptionRuntimeDetail)
+            return
+        }
+
+        for inputURL in fileURLs {
+            let request = TranscribeRequest(
+                inputURL: inputURL,
+                destinationDirectory: URL(fileURLWithPath: currentDestinationPath(for: .transcribe), isDirectory: true),
+                outputFormat: transcribeDraft.outputFormat,
+                overwriteExisting: preferencesStore.overwriteExisting
+            )
+
+            queueStore.enqueue(makeTranscribeJobRequest(for: request, title: inputURL.lastPathComponent))
+        }
+
+        selectedSection = .queue
+        inspectorMode = .logs
+    }
+
     func revealSelectedOutput() {
         if let queueURL = queueStore.selectedJob?.outputURL {
             FileHelpers.reveal(queueURL)
@@ -589,7 +903,7 @@ final class AppState {
         switch entry.jobKind {
         case .download:
             selectedSection = .download
-            downloadDraft.urlString = entry.source.remoteURL ?? downloadDraft.urlString
+            updateDownloadURL(entry.source.remoteURL ?? downloadDraft.urlString)
             downloadDraft.selectedPreset = entry.preset ?? downloadDraft.selectedPreset
             Task { await probeDownloadURL() }
         case .convert:
@@ -690,7 +1004,7 @@ final class AppState {
 
     var bundledRuntimeDetail: String {
         if isBundledRuntimeReady {
-            return "All bundled tools are arm64-only and free of Homebrew and Python runtime dependencies."
+            return "All bundled tools include Apple Silicon support and stay free of Homebrew and Python runtime dependencies."
         }
 
         if !toolIssues.isEmpty {
@@ -888,6 +1202,105 @@ final class AppState {
         return false
     }
 
+    private func normalizedDownloadURLString(_ urlString: String) -> String? {
+        let trimmedURL = urlString.trimmingCharacters(in: .whitespacesAndNewlines)
+        return trimmedURL.isEmpty ? nil : trimmedURL
+    }
+
+    private func remoteURLStrings(in text: String) -> [String] {
+        text
+            .components(separatedBy: .whitespacesAndNewlines)
+            .flatMap { $0.components(separatedBy: CharacterSet(charactersIn: "<>\"'")) }
+            .compactMap(normalizedDownloadURLString)
+    }
+
+    private func uniqueRemoteDownloadURLStrings(_ urlStrings: [String]) -> [String] {
+        var seen = Set<String>()
+        return urlStrings.compactMap { candidate in
+            guard let normalized = normalizedDownloadURLString(candidate),
+                  let url = URL(string: normalized),
+                  let scheme = url.scheme?.lowercased(),
+                  scheme == "http" || scheme == "https",
+                  seen.insert(normalized).inserted else {
+                return nil
+            }
+            return normalized
+        }
+    }
+
+    private func currentDownloadSourceContext() -> DownloadSourceContext {
+        DownloadSourceContext(
+            normalizedURLString: normalizedDownloadURLString(downloadDraft.urlString),
+            selectedAuthProfileID: downloadDraft.selectedAuthProfileID
+        )
+    }
+
+    private func invalidateDownloadProbeIfNeeded(from previousContext: DownloadSourceContext) {
+        guard currentDownloadSourceContext() != previousContext else { return }
+        invalidateDownloadProbeState()
+    }
+
+    private func invalidateDownloadProbeState() {
+        activeDownloadProbeSessionID = UUID()
+        downloadDraft.metadata = nil
+        downloadDraft.isProbing = false
+        downloadDraft.selectedFormatID = DownloadDraft.automaticFormatID
+        downloadDraft.lastProbedURLString = nil
+        downloadDraft.lastProbedAuthFingerprint = nil
+        clearDownloadProbeStatus()
+    }
+
+    private func clearDownloadProbeStatus() {
+        downloadDraft.probeStatusTitle = nil
+        downloadDraft.probeStatusMessage = nil
+    }
+
+    private func beginDownloadProbeStatus(title: String, message: String) -> UUID {
+        let sessionID = UUID()
+        activeDownloadProbeSessionID = sessionID
+        downloadDraft.probeStatusTitle = title
+        downloadDraft.probeStatusMessage = message
+        downloadDraft.isProbing = true
+        return sessionID
+    }
+
+    private func finishDownloadProbeStatus(_ sessionID: UUID) {
+        guard isCurrentDownloadProbeSession(sessionID) else { return }
+        downloadDraft.isProbing = false
+    }
+
+    private func isCurrentDownloadProbeSession(_ sessionID: UUID) -> Bool {
+        activeDownloadProbeSessionID == sessionID
+    }
+
+    private func downloadAuthFingerprint(for resolvedAuth: ResolvedDownloadAuth?) -> String? {
+        resolvedAuth?.freshnessFingerprint
+    }
+
+    private func hasFreshDownloadMetadata(for resolvedAuth: ResolvedDownloadAuth?) -> Bool {
+        guard downloadDraft.metadata != nil else { return false }
+
+        return downloadDraft.lastProbedURLString == normalizedDownloadURLString(downloadDraft.urlString)
+            && downloadDraft.lastProbedAuthFingerprint == downloadAuthFingerprint(for: resolvedAuth)
+    }
+
+    private func currentDownloadInlineJob() -> JobRecord? {
+        guard let currentURL = normalizedDownloadURLString(downloadDraft.urlString) else {
+            return nil
+        }
+
+        let matchesCurrentSource: (JobRecord) -> Bool = { job in
+            guard job.request.kind == .download else { return false }
+            return self.normalizedDownloadURLString(job.request.source.remoteURL ?? "") == currentURL
+        }
+
+        if let runningJob = queueStore.jobs.first(where: { $0.status == .running && matchesCurrentSource($0) }) {
+            return runningJob
+        }
+
+        return queueStore.jobs.first(where: { $0.status == .pending && matchesCurrentSource($0) })
+    }
+
     private func resolveSelectedDownloadAuthForCurrentDraft() throws -> ResolvedDownloadAuth? {
         guard let selectedAuthProfileID = downloadDraft.selectedAuthProfileID else {
             return nil
@@ -899,7 +1312,7 @@ final class AppState {
             if authProfileStore.defaultProfileID == selectedAuthProfileID {
                 authProfileStore.setDefaultProfile(id: nil)
             }
-            downloadDraft.selectedAuthProfileID = nil
+            updateSelectedDownloadAuthProfileID(nil)
             alert = AppAlert(
                 title: "Authentication profile unavailable",
                 message: "\(error.localizedDescription)\nChoose another profile or continue without auth."
@@ -949,6 +1362,8 @@ final class AppState {
         onEvent: @escaping @Sendable (JobEvent) async -> Void
     ) async {
         switch event {
+        case .stage(let stage):
+            await onEvent(.stage(stage))
         case .progress(let progress):
             let clamped = max(0, min(progress, 1))
             let scaled = progressRange.lowerBound + (progressRange.upperBound - progressRange.lowerBound) * clamped
@@ -1203,6 +1618,8 @@ final class AppState {
         runExport: (@escaping @Sendable (JobEvent) async -> Void) async throws -> JobResult,
         onEvent: @escaping @Sendable (JobEvent) async -> Void
     ) async throws -> JobResult {
+        await onEvent(.stage(.preparing))
+        await onEvent(.phase("Preparing job"))
         let progressPlan = mediaPipelineProgressPlan(for: subtitleWorkflow, burnCaptions: subtitleWorkflow.burnInVideo)
         var exportResult = try await runExport { [weak self] event in
             guard let self else { return }
@@ -1415,7 +1832,15 @@ final class AppState {
         let shouldSeedQueueHistory = arguments.contains("-uitest-seed-transcribe")
         let shouldSeedWorkspaces = arguments.contains("-uitest-seed-subtitle-workspaces")
         let shouldSeedAuthProfiles = arguments.contains("-uitest-seed-auth-profiles")
-        guard shouldSeedQueueHistory || shouldSeedWorkspaces || shouldSeedAuthProfiles else { return }
+        let shouldSeedDownloadProbeProgress = arguments.contains("-uitest-seed-download-probe-progress")
+        let shouldSeedRunningDownload = arguments.contains("-uitest-seed-running-download")
+        let shouldSeedFailedDownload = arguments.contains("-uitest-seed-failed-download")
+        guard shouldSeedQueueHistory
+            || shouldSeedWorkspaces
+            || shouldSeedAuthProfiles
+            || shouldSeedDownloadProbeProgress
+            || shouldSeedRunningDownload
+            || shouldSeedFailedDownload else { return }
 
         let fixtureRoot = FileManager.default.temporaryDirectory
             .appendingPathComponent("MediaGetterUITests", isDirectory: true)
@@ -1498,9 +1923,14 @@ final class AppState {
 
         if shouldSeedWorkspaces {
             downloadDraft.urlString = "https://example.com/video"
-            downloadDraft.metadata = downloadMetadata
-            downloadDraft.selectedFormatID = "137+140"
             downloadDraft.destinationDirectoryPath = fixtureRoot.path
+            let seededResolvedAuth = downloadDraft.selectedAuthProfileID.flatMap { try? authProfileStore.resolvedAuth(for: $0) }
+            applySuccessfulDownloadProbe(
+                metadata: downloadMetadata,
+                resolvedAuth: seededResolvedAuth,
+                title: "Inspection complete",
+                message: "Review the formats below and add the download job when you're ready."
+            )
 
             convertDraft.inputURL = mediaURL
             convertDraft.metadata = localMetadata
@@ -1522,6 +1952,102 @@ final class AppState {
                 ),
                 metadata: localMetadata
             )
+        }
+
+        if shouldSeedDownloadProbeProgress {
+            downloadDraft.urlString = "https://example.com/video"
+            downloadDraft.destinationDirectoryPath = fixtureRoot.path
+            downloadDraft.isProbing = true
+            downloadDraft.probeStatusTitle = "Inspecting URL"
+            downloadDraft.probeStatusMessage = "Checking available formats for the current source."
+        }
+
+        if shouldSeedRunningDownload {
+            downloadDraft.urlString = "https://example.com/video"
+            downloadDraft.destinationDirectoryPath = fixtureRoot.path
+            let now = Date()
+            let runningRequest = JobRequest(
+                kind: .download,
+                title: "Seeded Sample",
+                subtitle: OutputPresetID.mp4Video.title,
+                source: .remote("https://example.com/video"),
+                preset: .mp4Video,
+                transcriptionOutputFormat: nil,
+                payload: .download(
+                    DownloadRequest(
+                        sourceURLString: "https://example.com/video",
+                        destinationDirectory: fixtureRoot,
+                        selectedFormatID: DownloadDraft.automaticFormatID,
+                        preset: .mp4Video,
+                        subtitleWorkflow: .off(format: .srt),
+                        filenameTemplate: "%(title)s",
+                        overwriteExisting: true,
+                        resolvedAuth: nil
+                    )
+                )
+            )
+
+            let runningJob = JobRecord(
+                id: runningRequest.id,
+                request: runningRequest,
+                status: .running,
+                stage: .downloading,
+                progress: 0.42,
+                phase: "Downloading 1.2 MiB/s • ETA 00:03",
+                logs: ["download:42.0%|1.2 MiB/s|00:03"],
+                artifacts: [],
+                createdAt: now,
+                startedAt: now,
+                completedAt: nil,
+                errorMessage: nil
+            )
+
+            queueStore.jobs = [runningJob]
+            queueStore.selectedJobID = runningJob.id
+        }
+
+        if shouldSeedFailedDownload {
+            downloadDraft.urlString = "https://example.com/video"
+            downloadDraft.destinationDirectoryPath = fixtureRoot.path
+            let now = Date()
+            let failedRequest = JobRequest(
+                kind: .download,
+                title: "Seeded Failed Sample",
+                subtitle: OutputPresetID.mp4Video.title,
+                source: .remote("https://example.com/video"),
+                preset: .mp4Video,
+                transcriptionOutputFormat: nil,
+                payload: .download(
+                    DownloadRequest(
+                        sourceURLString: "https://example.com/video",
+                        destinationDirectory: fixtureRoot,
+                        selectedFormatID: DownloadDraft.automaticFormatID,
+                        preset: .mp4Video,
+                        subtitleWorkflow: .off(format: .srt),
+                        filenameTemplate: "%(title)s",
+                        overwriteExisting: true,
+                        resolvedAuth: nil
+                    )
+                )
+            )
+
+            let failedJob = JobRecord(
+                id: failedRequest.id,
+                request: failedRequest,
+                status: .failed,
+                stage: .failed,
+                progress: 0.35,
+                phase: "Failed",
+                logs: ["Process exited with code 1"],
+                artifacts: [],
+                createdAt: now,
+                startedAt: now,
+                completedAt: now,
+                errorMessage: "Process exited with code 1"
+            )
+
+            queueStore.jobs = [failedJob]
+            queueStore.selectedJobID = failedJob.id
         }
 
         guard shouldSeedQueueHistory else { return }
@@ -1558,6 +2084,7 @@ final class AppState {
             id: mediaRequest.id,
             request: mediaRequest,
             status: .completed,
+            stage: .completed,
             progress: 1,
             phase: "\(mediaURL.lastPathComponent) • \(savedSubtitleURL.lastPathComponent) saved",
             logs: ["Download finished", "Writing .srt subtitles"],

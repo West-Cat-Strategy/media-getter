@@ -104,8 +104,17 @@ targets:
             local tool_path="$1"
             local tool_name="$2"
             local dependency
+            local dependencies_file
 
-            for dependency in $(/usr/bin/otool -L "$tool_path" | tail -n +2 | sed 's/^[[:space:]]*//' | awk '{print $1}'); do
+            dependencies_file="$(mktemp)"
+            /usr/bin/otool -L "$tool_path" | tail -n +2 > "$dependencies_file"
+
+            while IFS= read -r line; do
+              line="${line#"${line%%[![:space:]]*}"}"
+              [[ -z "$line" ]] && continue
+              [[ "$line" == *"(architecture "*"):" ]] && continue
+              dependency="${line%% *}"
+
               case "$dependency" in
                 /System/*|/usr/lib/*|@executable_path/*|@loader_path/*|@rpath/*)
                   ;;
@@ -114,7 +123,9 @@ targets:
                   exit 1
                   ;;
               esac
-            done
+            done < "$dependencies_file"
+
+            rm -f "$dependencies_file"
           }
 
           for tool in yt-dlp ffmpeg ffprobe deno whisper-cli; do

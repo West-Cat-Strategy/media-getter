@@ -4,8 +4,7 @@ struct QueueWorkspaceView: View {
     @Bindable var appState: AppState
 
     var body: some View {
-        ScrollView {
-            VStack(alignment: .leading, spacing: 24) {
+        WorkspaceContainer {
                 WorkspaceHeader(
                     title: "Queue",
                     subtitle: "Keep downloads, transcodes, trims, and transcriptions in one place, inspect progress, and route finished media into the next workflow."
@@ -23,21 +22,17 @@ struct QueueWorkspaceView: View {
                         ForEach(appState.queueStore.jobs) { job in
                             StudioCard {
                                 VStack(alignment: .leading, spacing: 12) {
-                                    HStack(alignment: .top) {
-                                        VStack(alignment: .leading, spacing: 6) {
-                                            Text(job.request.title)
-                                                .font(.headline)
-                                            Text(job.request.subtitle)
-                                                .foregroundStyle(.secondary)
-                                            if job.request.isAutoSubtitleJob {
-                                                Text("Linked auto-subtitle job")
-                                                    .font(.caption)
-                                                    .foregroundStyle(.secondary)
-                                            }
+                                    ViewThatFits(in: .horizontal) {
+                                        HStack(alignment: .top) {
+                                            jobSummary(for: job)
+                                            Spacer()
+                                            StatusBadge(status: job.status)
                                         }
 
-                                        Spacer()
-                                        StatusBadge(status: job.status)
+                                        VStack(alignment: .leading, spacing: 10) {
+                                            jobSummary(for: job)
+                                            StatusBadge(status: job.status)
+                                        }
                                     }
 
                                     ProgressView(value: job.progress)
@@ -48,9 +43,11 @@ struct QueueWorkspaceView: View {
                                         Text(outputURL.path)
                                             .font(.caption)
                                             .foregroundStyle(.secondary)
+                                            .lineLimit(2)
+                                            .truncationMode(.middle)
                                     }
 
-                                    HStack {
+                                    AdaptiveButtonRow {
                                         Button("Show Logs") {
                                             appState.queueStore.selectedJobID = job.id
                                             appState.inspectorMode = .logs
@@ -62,16 +59,19 @@ struct QueueWorkspaceView: View {
                                             }
                                         }
 
-                                        if job.status == .running {
+                                        if job.status == .pending || job.status == .running || job.status == .cancelling {
                                             Button("Cancel") {
                                                 appState.queueStore.cancel(jobID: job.id)
                                             }
+                                            .disabled(job.status == .cancelling)
+                                            .accessibilityIdentifier(AccessibilityID.queueJobCancelButton)
                                         }
 
                                         if job.status == .failed || job.status == .cancelled {
                                             Button("Retry") {
                                                 appState.queueStore.retry(jobID: job.id)
                                             }
+                                            .accessibilityIdentifier(AccessibilityID.queueJobRetryButton)
                                         }
 
                                         if job.outputURL != nil {
@@ -80,7 +80,6 @@ struct QueueWorkspaceView: View {
                                                 appState.revealSelectedOutput()
                                             }
                                         }
-
                                     }
 
                                     SubtitleArtifactSection(
@@ -116,8 +115,22 @@ struct QueueWorkspaceView: View {
                     }
                     .accessibilityIdentifier(AccessibilityID.queueList)
                 }
+        }
+    }
+
+    private func jobSummary(for job: JobRecord) -> some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Text(job.request.title)
+                .font(.headline)
+                .lineLimit(2)
+            Text(job.request.subtitle)
+                .foregroundStyle(.secondary)
+                .lineLimit(2)
+            if job.request.isAutoSubtitleJob {
+                Text("Linked auto-subtitle job")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
             }
-            .frame(maxWidth: 980, alignment: .leading)
         }
     }
 }

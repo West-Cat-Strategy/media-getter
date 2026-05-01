@@ -73,7 +73,7 @@ struct DownloadAuthProfileSheet: View {
                         Text("Step")
                             .font(.subheadline.weight(.semibold))
 
-                        HStack(spacing: 8) {
+                        WrappingHStack(horizontalSpacing: 8, verticalSpacing: 8) {
                             ForEach(DownloadAuthWizardStep.allCases) { wizardStep in
                                 stepButton(for: wizardStep)
                             }
@@ -126,7 +126,7 @@ struct DownloadAuthProfileSheet: View {
                 }
             }
         }
-        .frame(minWidth: 680, minHeight: 520)
+        .frame(minWidth: 520, minHeight: 420)
     }
 
     private var strategyStep: some View {
@@ -205,9 +205,8 @@ struct DownloadAuthProfileSheet: View {
                 TextField("User-Agent (optional)", text: $draft.userAgent)
 
                 VStack(alignment: .leading, spacing: 10) {
-                    HStack {
+                    AdaptiveButtonRow {
                         Text("Custom headers")
-                        Spacer()
                         Button("Add Header") {
                             draft.customHeaders.append(DownloadHeaderField())
                         }
@@ -218,12 +217,23 @@ struct DownloadAuthProfileSheet: View {
                             .foregroundStyle(.secondary)
                     } else {
                         ForEach($draft.customHeaders) { $header in
-                            HStack {
-                                TextField("Header name", text: $header.name)
-                                TextField("Header value", text: $header.value)
+                            ViewThatFits(in: .horizontal) {
+                                HStack {
+                                    TextField("Header name", text: $header.name)
+                                    TextField("Header value", text: $header.value)
 
-                                Button("Remove") {
-                                    draft.customHeaders.removeAll { $0.id == header.id }
+                                    Button("Remove") {
+                                        draft.customHeaders.removeAll { $0.id == header.id }
+                                    }
+                                }
+
+                                VStack(alignment: .leading, spacing: 8) {
+                                    TextField("Header name", text: $header.name)
+                                    TextField("Header value", text: $header.value)
+
+                                    Button("Remove") {
+                                        draft.customHeaders.removeAll { $0.id == header.id }
+                                    }
                                 }
                             }
                         }

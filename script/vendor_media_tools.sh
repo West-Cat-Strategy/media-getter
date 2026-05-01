@@ -2,7 +2,7 @@
 set -euo pipefail
 
 YT_DLP_VERSION="${YT_DLP_VERSION:-2026.03.17}"
-DENO_VERSION="${DENO_VERSION:-2.7.12}"
+DENO_VERSION="${DENO_VERSION:-2.7.14}"
 FFMPEG_VERSION="${FFMPEG_VERSION:-8.1}"
 X264_VERSION="${X264_VERSION:-r3222}"
 X264_REVISION="${X264_REVISION:-b35605ace3ddf7c1a5d67a2eb553f034aef41d55}"
@@ -78,8 +78,12 @@ assert_self_contained_binary() {
   local tool_path="$1"
   local dependency
 
-  while read -r dependency _; do
-    [[ -z "$dependency" ]] && continue
+  while IFS= read -r line; do
+    line="${line#"${line%%[![:space:]]*}"}"
+    [[ -z "$line" ]] && continue
+    [[ "$line" == *"(architecture "*"):" ]] && continue
+
+    dependency="${line%% *}"
 
     case "$dependency" in
       /System/*|/usr/lib/*|@executable_path/*|@loader_path/*|@rpath/*)

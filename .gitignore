@@ -2,6 +2,7 @@
 .build
 build
 dist
+/MediaGetter.dmg
 DerivedData
 *.xcuserstate
 xcuserdata/

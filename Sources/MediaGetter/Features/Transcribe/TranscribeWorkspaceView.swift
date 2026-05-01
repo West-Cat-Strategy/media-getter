@@ -1,12 +1,10 @@
 import SwiftUI
-import UniformTypeIdentifiers
 
 struct TranscribeWorkspaceView: View {
     @Bindable var appState: AppState
 
     var body: some View {
-        ScrollView {
-            VStack(alignment: .leading, spacing: 24) {
+        WorkspaceContainer {
                 WorkspaceHeader(
                     title: "Transcribe",
                     subtitle: "Open a local or previously downloaded media file, then create a local English transcript with bundled Whisper output as text, SRT, or VTT."
@@ -25,7 +23,7 @@ struct TranscribeWorkspaceView: View {
                             .foregroundStyle(.secondary)
                     }
 
-                    HStack {
+                    AdaptiveButtonRow {
                         Button("Open File") {
                             appState.selectedSection = .transcribe
                             appState.openMediaFileForCurrentSection()
@@ -39,16 +37,6 @@ struct TranscribeWorkspaceView: View {
                         }
                     }
                 }
-                .onDrop(of: [UTType.fileURL.identifier], isTargeted: nil) { providers in
-                    DropSupport.handleURLOrTextProviders(
-                        providers,
-                        onFile: { fileURL in
-                            Task { await appState.loadLocalFile(fileURL, for: .transcribe) }
-                        },
-                        onText: { _ in }
-                    )
-                }
-
                 if let metadata = appState.transcribeDraft.metadata {
                     MetadataSummaryCard(metadata: metadata)
                 }
@@ -85,8 +73,6 @@ struct TranscribeWorkspaceView: View {
                     .disabled(appState.transcribeDraft.inputURL == nil || !appState.isTranscriptionReady)
                     .accessibilityIdentifier(AccessibilityID.transcribeQueueButton)
                 }
-            }
-            .frame(maxWidth: 980, alignment: .leading)
         }
     }
 }

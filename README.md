@@ -13,3 +13,18 @@ script/vendor_media_tools.sh
 ```
 
 The Xcode build already reports the same command when a required vendored tool or model asset is missing.
+
+## Local DMG
+
+Export or build the app bundle first, then create a local DMG at the project root:
+
+```bash
+script/export_release_bundle.sh
+script/build_dmg.sh
+```
+
+If you already have an app bundle elsewhere, pass it directly:
+
+```bash
+script/build_dmg.sh /path/to/MediaGetter.app
+```

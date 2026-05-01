@@ -1,12 +1,10 @@
 import SwiftUI
-import UniformTypeIdentifiers
 
 struct ConvertWorkspaceView: View {
     @Bindable var appState: AppState
 
     var body: some View {
-        ScrollView {
-            VStack(alignment: .leading, spacing: 24) {
+        WorkspaceContainer {
                 WorkspaceHeader(
                     title: "Convert",
                     subtitle: "Open a local file or a previous output, choose a small set of good presets, and keep advanced codec overrides tucked away until you need them."
@@ -25,7 +23,7 @@ struct ConvertWorkspaceView: View {
                             .foregroundStyle(.secondary)
                     }
 
-                    HStack {
+                    AdaptiveButtonRow {
                         Button("Open File") {
                             appState.openMediaFileForCurrentSection()
                         }
@@ -38,16 +36,6 @@ struct ConvertWorkspaceView: View {
                         }
                     }
                 }
-                .onDrop(of: [UTType.fileURL.identifier], isTargeted: nil) { providers in
-                    DropSupport.handleURLOrTextProviders(
-                        providers,
-                        onFile: { fileURL in
-                            Task { await appState.loadLocalFile(fileURL, for: .convert) }
-                        },
-                        onText: { _ in }
-                    )
-                }
-
                 if let metadata = appState.convertDraft.metadata {
                     MetadataSummaryCard(metadata: metadata)
                 }
@@ -134,8 +122,6 @@ struct ConvertWorkspaceView: View {
                     )
                     .accessibilityIdentifier(AccessibilityID.convertQueueButton)
                 }
-            }
-            .frame(maxWidth: 980, alignment: .leading)
         }
     }
 }

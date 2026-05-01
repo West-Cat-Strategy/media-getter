@@ -1,13 +1,11 @@
 import AVKit
 import SwiftUI
-import UniformTypeIdentifiers
 
 struct TrimWorkspaceView: View {
     @Bindable var appState: AppState
 
     var body: some View {
-        ScrollView {
-            VStack(alignment: .leading, spacing: 24) {
+        WorkspaceContainer {
                 WorkspaceHeader(
                     title: "Trim",
                     subtitle: "Preview one local clip, set precise in and out points, and export a short segment with fast copy when it is safe."
@@ -32,16 +30,6 @@ struct TrimWorkspaceView: View {
                     }
                     .accessibilityIdentifier(AccessibilityID.trimOpenButton)
                 }
-                .onDrop(of: [UTType.fileURL.identifier], isTargeted: nil) { providers in
-                    DropSupport.handleURLOrTextProviders(
-                        providers,
-                        onFile: { fileURL in
-                            Task { await appState.loadLocalFile(fileURL, for: .trim) }
-                        },
-                        onText: { _ in }
-                    )
-                }
-
                 StudioCard {
                     Picker("Trim preset", selection: $appState.trimDraft.selectedPreset) {
                         ForEach(OutputPresetID.trimPresets) { preset in
@@ -131,16 +119,20 @@ struct TrimWorkspaceView: View {
                                     in: 0...max(duration, 0.1)
                                 )
 
-                                HStack {
-                                    Text("Playhead \(Formatters.timecode(appState.trimDraft.playerPosition))")
-                                        .font(.caption)
-                                        .foregroundStyle(.secondary)
-                                    Spacer()
-                                    Button("Mark In") {
-                                        appState.setTrimStartToCurrentPosition()
+                                ViewThatFits(in: .horizontal) {
+                                    HStack {
+                                        Text("Playhead \(Formatters.timecode(appState.trimDraft.playerPosition))")
+                                            .font(.caption)
+                                            .foregroundStyle(.secondary)
+                                        Spacer()
+                                        trimMarkButtons
                                     }
-                                    Button("Mark Out") {
-                                        appState.setTrimEndToCurrentPosition()
+
+                                    VStack(alignment: .leading, spacing: 10) {
+                                        Text("Playhead \(Formatters.timecode(appState.trimDraft.playerPosition))")
+                                            .font(.caption)
+                                            .foregroundStyle(.secondary)
+                                        trimMarkButtons
                                     }
                                 }
                             }
@@ -193,8 +185,17 @@ struct TrimWorkspaceView: View {
                         .textFieldStyle(.roundedBorder)
                     }
                 }
+        }
+    }
+
+    private var trimMarkButtons: some View {
+        AdaptiveButtonRow {
+            Button("Mark In") {
+                appState.setTrimStartToCurrentPosition()
             }
-            .frame(maxWidth: 980, alignment: .leading)
+            Button("Mark Out") {
+                appState.setTrimEndToCurrentPosition()
+            }
         }
     }
 }

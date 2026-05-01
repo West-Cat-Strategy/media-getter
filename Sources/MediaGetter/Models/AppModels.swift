@@ -73,21 +73,81 @@ enum JobKind: String, Codable {
 enum JobStatus: String, Codable {
     case pending
     case running
+    case cancelling
     case completed
     case failed
     case cancelled
 
     var title: String {
-        rawValue.capitalized
+        switch self {
+        case .cancelling:
+            "Cancelling"
+        default:
+            rawValue.capitalized
+        }
     }
 
     var tint: NSColor {
         switch self {
         case .pending: .secondaryLabelColor
         case .running: .systemBlue
+        case .cancelling: .systemOrange
         case .completed: .systemGreen
         case .failed: .systemRed
         case .cancelled: .systemOrange
+        }
+    }
+}
+
+enum JobExecutionStage: String, Codable, Equatable {
+    case queued
+    case preparing
+    case downloading
+    case transcoding
+    case trimming
+    case extractingAudio
+    case generatingSubtitles
+    case transcribing
+    case normalizingSubtitles
+    case burningCaptions
+    case writingOutput
+    case cancelling
+    case completed
+    case failed
+    case cancelled
+
+    var cancelDescription: String {
+        switch self {
+        case .queued:
+            "queued job"
+        case .preparing:
+            "preparation"
+        case .downloading:
+            "download"
+        case .transcoding:
+            "conversion"
+        case .trimming:
+            "trim"
+        case .extractingAudio:
+            "audio extraction"
+        case .generatingSubtitles:
+            "subtitle generation"
+        case .transcribing:
+            "transcription"
+        case .normalizingSubtitles:
+            "subtitle normalization"
+        case .burningCaptions:
+            "caption burn-in"
+        case .writingOutput:
+            "output write"
+        case .cancelling:
+            "job"
+        case .completed:
+            "completed job"
+        case .failed:
+            "failed job"
+        case .cancelled:
+            "cancelled job"
         }
     }
 }
@@ -155,7 +215,7 @@ enum ToolBinaryArchitecture: String, Codable, Equatable {
     }
 
     var isAppleSiliconReady: Bool {
-        self == .arm64
+        self == .arm64 || self == .universal
     }
 }
 
@@ -744,6 +804,7 @@ struct JobRecord: Identifiable, Equatable {
     var id: UUID
     var request: JobRequest
     var status: JobStatus
+    var stage: JobExecutionStage
     var progress: Double
     var phase: String
     var logs: [String]
@@ -757,6 +818,7 @@ struct JobRecord: Identifiable, Equatable {
         id: UUID,
         request: JobRequest,
         status: JobStatus,
+        stage: JobExecutionStage = .queued,
         progress: Double,
         phase: String,
         logs: [String],
@@ -770,6 +832,7 @@ struct JobRecord: Identifiable, Equatable {
         self.id = id
         self.request = request
         self.status = status
+        self.stage = stage
         self.progress = progress
         self.phase = phase
         self.logs = logs
@@ -996,6 +1059,7 @@ struct TrimPlan: Equatable {
 }
 
 enum JobEvent: Equatable {
+    case stage(JobExecutionStage)
     case phase(String)
     case progress(Double)
     case log(String)
@@ -1039,15 +1103,21 @@ struct JobResult: Equatable {
 }
 
 struct DownloadDraft: Equatable {
+    static let automaticFormatID = "bestvideo*+bestaudio/best"
+
     var urlString: String = ""
     var selectedPreset: OutputPresetID = .mp4Video
-    var selectedFormatID: String = "bestvideo*+bestaudio/best"
+    var selectedFormatID: String = automaticFormatID
     var destinationDirectoryPath: String = ""
     var subtitleWorkflow: SubtitleWorkflowOptions = .off(format: .srt)
     var filenameTemplate: String = "%(title)s"
     var selectedAuthProfileID: UUID?
     var metadata: MediaMetadata?
     var isProbing: Bool = false
+    var lastProbedURLString: String?
+    var lastProbedAuthFingerprint: String?
+    var probeStatusTitle: String?
+    var probeStatusMessage: String?
 }
 
 struct ConvertDraft: Equatable {

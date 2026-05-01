@@ -2,6 +2,7 @@ import SwiftUI
 
 struct RootSplitView: View {
     @Bindable var appState: AppState
+    @State private var isDropTargeted = false
 
     var body: some View {
         NavigationSplitView {
@@ -27,8 +28,20 @@ struct RootSplitView: View {
             }
             .listStyle(.sidebar)
         } detail: {
-            workspaceView
-                .padding(24)
+            ZStack(alignment: .bottom) {
+                workspaceView
+
+                if isDropTargeted {
+                    WorkspaceDropOverlay(section: appState.selectedSection)
+                        .padding(.bottom, LayoutMetrics.compactPadding)
+                        .padding(.horizontal, LayoutMetrics.compactPadding)
+                        .transition(.move(edge: .bottom).combined(with: .opacity))
+                }
+            }
+            .animation(.easeInOut(duration: 0.16), value: isDropTargeted)
+            .onDrop(of: DropSupport.supportedTypeIdentifiers, isTargeted: $isDropTargeted) { providers in
+                handleDrop(providers)
+            }
                 .toolbar {
                     ToolbarItemGroup {
                         Button("Paste URL", systemImage: "clipboard") {
@@ -61,7 +74,7 @@ struct RootSplitView: View {
         }
         .inspector(isPresented: inspectorBinding) {
             InspectorPanel(appState: appState)
-                .inspectorColumnWidth(min: 260, ideal: 320, max: 380)
+                .inspectorColumnWidth(min: 220, ideal: 300, max: 380)
         }
         .alert(
             appState.alert?.title ?? "Alert",
@@ -76,6 +89,23 @@ struct RootSplitView: View {
         } message: {
             Text(appState.alert?.message ?? "")
         }
+    }
+
+    private func handleDrop(_ providers: [NSItemProvider]) -> Bool {
+        let targetSection = appState.selectedSection
+
+        return DropSupport.handleURLOrTextProviders(
+            providers,
+            onFile: { fileURL in
+                appState.enqueueDroppedFiles([fileURL], for: targetSection)
+            },
+            onRemoteURL: { remoteURL in
+                appState.enqueueDroppedDownloadURLs([remoteURL.absoluteString])
+            },
+            onText: { text in
+                appState.enqueueDroppedDownloadText(text)
+            }
+        )
     }
 
     @ViewBuilder
